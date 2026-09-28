@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sustainable Lifestyle</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- 登录视图 -->
+  <div id="view-login" class="view hidden">
+    <div class="login-card">
+      <h1>Sustainable Lifestyle</h1>
+      <p class="subtitle">每日背诵 · 善行叙述 · 互相勉励</p>
+      <div id="tg-tip" class="tg-tip hidden">已通过 Telegram 识别身份，正在进入…</div>
+      <div class="field">
+        <label>用户名</label>
+        <input id="login-username" type="text" placeholder="你的名字（首次输入即注册）" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>密码（可选）</label>
+        <input id="login-password" type="password" placeholder="不填则为免密登录" autocomplete="current-password">
+      </div>
+      <button id="btn-login" class="btn primary">进入</button>
+      <div id="login-msg" class="msg"></div>
+      <p class="hint">浏览器模式下首次输入用户名即自动注册；<br>在 Telegram 中打开会自动识别身份，无需输入。</p>
+    </div>
+  </div>
+
+  <!-- 主框架 -->
+  <div id="view-app" class="view hidden">
+    <header class="topbar">
+      <nav id="nav" class="nav"></nav>
+      <div id="user-chip" class="user-chip"></div>
+    </header>
+    <main id="content" class="content"></main>
+  </div>
+
+</div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
