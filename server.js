@@ -1,7 +1,6 @@
-'use strict';
+﻿'use strict';
 // ============================================================
-// 偈语背诵打卡小程序 · Supabase 版
-// 结构：public/ 静态前端 + Supabase 数据库 + REST API
+// 鍋堣鑳岃鎵撳崱灏忕▼搴?路 Supabase 鐗?// 缁撴瀯锛歱ublic/ 闈欐€佸墠绔?+ Supabase 鏁版嵁搴?+ REST API
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -12,21 +11,21 @@ const os = require('os');
 const config = require('./config');
 const { createClient } = require('@supabase/supabase-js');
 
-// ---------------- Supabase 客户端 ----------------
+// ---------------- Supabase 瀹㈡埛绔?----------------
 let supabase = null;
 if (config.SUPABASE_URL && config.SUPABASE_SERVICE_KEY) {
   supabase = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_KEY);
-  console.log('[Supabase] 连接成功:', config.SUPABASE_URL);
+  console.log('[Supabase] 杩炴帴鎴愬姛:', config.SUPABASE_URL);
 } else {
-  console.error('[Supabase] 未配置 SUPABASE_URL 或 SUPABASE_SERVICE_KEY');
+  console.error('[Supabase] 鏈厤缃?SUPABASE_URL 鎴?SUPABASE_SERVICE_KEY');
   process.exit(1);
 }
 
-// ---------------- 数据目录（附件上传用） ----------------
+// ---------------- 鏁版嵁鐩綍锛堥檮浠朵笂浼犵敤锛?----------------
 const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// ---------------- 工具函数 ----------------
+// ---------------- 宸ュ叿鍑芥暟 ----------------
 function uid() { return crypto.randomUUID(); }
 function nowIso() { return new Date().toISOString(); }
 function todayStr() {
@@ -42,7 +41,7 @@ function publicUser(u) {
   return { id: u.id, username: u.username, role: u.role, telegramId: u.telegram_id || null, createdAt: u.created_at };
 }
 
-// Telegram WebApp initData 签名验证
+// Telegram WebApp initData 绛惧悕楠岃瘉
 function verifyInitData(initData, botToken) {
   try {
     const params = new URLSearchParams(initData);
@@ -62,7 +61,7 @@ function verifyInitData(initData, botToken) {
   } catch (e) { return null; }
 }
 
-// ---------------- 认证 ----------------
+// ---------------- 璁よ瘉 ----------------
 async function authUser(req) {
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -76,7 +75,7 @@ async function authUser(req) {
 
 function isAdmin(user) { return user && user.role === 'admin'; }
 
-// ---------------- 响应工具 ----------------
+// ---------------- 鍝嶅簲宸ュ叿 ----------------
 function json(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -95,14 +94,14 @@ function sanitizeFileName(name) {
   return String(name || 'file').replace(/[\\/:\*\?"<>\|\x00-\x1f]/g, '_').slice(0, 120);
 }
 
-// 附件保存：仅允许 PDF / Word，单文件 ≤ 8MB
+// 闄勪欢淇濆瓨锛氫粎鍏佽 PDF / Word锛屽崟鏂囦欢 鈮?8MB
 const ATT_EXT = ['.pdf', '.doc', '.docx'];
 const ATT_MAX_MB = 8;
 function saveAttachment(buf, name) {
   const ext = (path.extname(String(name || '')) || '').toLowerCase();
-  if (!ATT_EXT.includes(ext)) return { error: '仅支持 PDF / Word 文档（.pdf .doc .docx）' };
-  if (!buf.length) return { error: '文件内容为空' };
-  if (buf.length > ATT_MAX_MB * 1024 * 1024) return { error: '单文件不能超过 ' + ATT_MAX_MB + 'MB' };
+  if (!ATT_EXT.includes(ext)) return { error: '浠呮敮鎸?PDF / Word 鏂囨。锛?pdf .doc .docx锛? };
+  if (!buf.length) return { error: '鏂囦欢鍐呭涓虹┖' };
+  if (buf.length > ATT_MAX_MB * 1024 * 1024) return { error: '鍗曟枃浠朵笉鑳借秴杩?' + ATT_MAX_MB + 'MB' };
   const fname = uid().slice(0, 8) + '-' + sanitizeFileName(name);
   fs.writeFileSync(path.join(UPLOAD_DIR, fname), buf);
   return { att: { id: uid(), fileName: fname, name: String(name), size: buf.length, addedAt: nowIso() } };
@@ -115,7 +114,7 @@ function readBody(req, limitMB) {
     let size = 0;
     req.on('data', c => {
       size += c.length;
-      if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+      if (size > limit) { reject(new Error('璇锋眰浣撹繃澶?)); req.destroy(); return; }
       chunks.push(c);
     });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
@@ -126,11 +125,10 @@ function readBody(req, limitMB) {
 async function parseJsonBody(req) {
   const raw = await readBody(req);
   if (!raw.trim()) return {};
-  try { return JSON.parse(raw); } catch (e) { throw Object.assign(new Error('JSON 解析失败'), { status: 400 }); }
+  try { return JSON.parse(raw); } catch (e) { throw Object.assign(new Error('JSON 瑙ｆ瀽澶辫触'), { status: 400 }); }
 }
 
-// 善叙述历史版本保留策略
-async function pruneGoodDeedVersions(gd) {
+// 鍠勫彊杩板巻鍙茬増鏈繚鐣欑瓥鐣?async function pruneGoodDeedVersions(gd) {
   const { data: settings } = await supabase.from('settings').select('gooddeed_retention_days').eq('id', 1).single();
   const days = settings?.gooddeed_retention_days || 30;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -141,7 +139,7 @@ async function pruneGoodDeedVersions(gd) {
   return gd;
 }
 
-// ---------------- 路由 ----------------
+// ---------------- 璺敱 ----------------
 const routes = [];
 function route(method, pattern, handler) {
   const keys = [];
@@ -149,12 +147,13 @@ function route(method, pattern, handler) {
   routes.push({ method, rx, keys, handler });
 }
 
-// ============ 认证 ============
+// ============ 璁よ瘉 ============
 route('POST', '/api/auth/login', async (req, res) => {
   try {
     const body = await parseJsonBody(req);
     const username = String(body.username || '').trim();
-    const password = String(body.password || '');
+    if (!username || username.length > 30) return err(res, 400, '用户名需要1-30个字符');
+
     console.log('[Login] 尝试登录:', username);
 
     const { data: user, error: userErr } = await supabase
@@ -163,15 +162,14 @@ route('POST', '/api/auth/login', async (req, res) => {
       .eq('username', username)
       .single();
 
-    console.log('[Login] 查询结果:', user, '错误:', userErr);
+    console.log('[Login] 查询用户结果:', user ? '找到' : '未找到', userErr ? '错误: ' + userErr.message : '');
 
     if (!user) {
-      return err(res, 404, '用户不存在: ' + username);
+      return err(res, 404, '用户不存在: ' + username + '（请确认已在数据库中创建）');
     }
 
     if (user.password_hash) {
-      const salt = user.salt;
-      const hash = crypto.createHash('sha256').update(salt + ':' + password).digest('hex');
+      const hash = hashPassword(String(body.password || ''), user.salt);
       console.log('[Login] 密码验证:', hash === user.password_hash ? '通过' : '失败');
       if (hash !== user.password_hash) {
         return err(res, 401, '密码错误');
@@ -180,22 +178,27 @@ route('POST', '/api/auth/login', async (req, res) => {
 
     const token = crypto.randomBytes(32).toString('hex');
     const { error: sessErr } = await supabase.from('sessions').insert({ token, user_id: user.id });
-    console.log('[Login] 创建session:', sessErr ? '失败: ' + JSON.stringify(sessErr) : '成功');
+    if (sessErr) {
+      console.error('[Login] 创建session失败:', sessErr);
+      return err(res, 500, '创建会话失败: ' + sessErr.message);
+    }
 
+    console.log('[Login] 登录成功:', username);
     json(res, 200, {
       token,
-      user: { id: user.id, username: user.username, role: user.role, telegramId: user.telegram_id, createdAt: user.created_at }
+      user: publicUser(user)
     });
   } catch (e) {
     console.error('[Login] 异常:', e);
-    err(res, 500, e.message + ' | ' + e.stack);
+    err(res, 500, e.message);
   }
 });
-route('POST', '/api/auth/telegram, async (req, res) => {
-  if (!config.BOT_TOKEN) return err(res, 500, 'BOT_TOKEN 未配置');
+
+route('POST', '/api/auth/telegram', async (req, res) => {
+  if (!config.BOT_TOKEN) return err(res, 500, 'BOT_TOKEN 鏈厤缃?);
   const body = await parseJsonBody(req);
   const tgUser = verifyInitData(String(body.initData || ''), config.BOT_TOKEN);
-  if (!tgUser) return err(res, 401, 'Telegram 身份验证失败');
+  if (!tgUser) return err(res, 401, 'Telegram 韬唤楠岃瘉澶辫触');
   const tgId = String(tgUser.id);
 
   const { data: settings } = await supabase.from('settings').select('member_limit').eq('id', 1).single();
@@ -205,7 +208,7 @@ route('POST', '/api/auth/telegram, async (req, res) => {
 
   if (!user) {
     const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
-    if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
+    if (count >= memberLimit) return err(res, 403, `鎴愬憳宸叉弧锛堜笂闄?${memberLimit} 浜猴級锛岃鑱旂郴绠＄悊鍛樺鍔犱汉鏁癭);
 
     const newUser = {
       id: uid(),
@@ -236,41 +239,41 @@ route('POST', '/api/auth/logout', async (req, res) => {
 
 route('GET', '/api/me', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
   const { data: settings } = await supabase.from('settings').select('*').eq('id', 1).single();
   json(res, 200, { user: publicUser(user), settings });
 });
 
 route('PUT', '/api/me', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
   const body = await parseJsonBody(req);
   const name = String(body.username || '').trim();
-  if (!name || name.length > 30) return err(res, 400, '昵称需为 1-30 个字符');
+  if (!name || name.length > 30) return err(res, 400, '鏄电О闇€涓?1-30 涓瓧绗?);
 
   const { data: dup } = await supabase.from('users').select('id').eq('username', name).neq('id', user.id).single();
-  if (dup) return err(res, 400, '这个昵称已被使用');
+  if (dup) return err(res, 400, '杩欎釜鏄电О宸茶浣跨敤');
 
   await supabase.from('users').update({ username: name }).eq('id', user.id);
   const { data: updated } = await supabase.from('users').select('*').eq('id', user.id).single();
   json(res, 200, { user: publicUser(updated) });
 });
 
-// ============ 每日偈语 / 偈语库 ============
+// ============ 姣忔棩鍋堣 / 鍋堣搴?============
 route('GET', '/api/daily', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const today = todayStr();
   let { data: teaching } = await supabase.from('teachings').select('*').eq('scheduled_date', today).order('created_at', { ascending: false }).limit(1).single();
-  let note = '今日安排';
+  let note = '浠婃棩瀹夋帓';
 
   if (!teaching) {
     const { data: past } = await supabase.from('teachings').select('*').lte('scheduled_date', today).order('scheduled_date', { ascending: false }).limit(1).single();
-    if (past) { teaching = past; note = '最近安排'; }
+    if (past) { teaching = past; note = '鏈€杩戝畨鎺?; }
     else {
       const { data: latest } = await supabase.from('teachings').select('*').order('created_at', { ascending: false }).limit(1).single();
-      if (latest) { teaching = latest; note = '最新内容'; }
+      if (latest) { teaching = latest; note = '鏈€鏂板唴瀹?; }
     }
   }
 
@@ -285,7 +288,7 @@ route('GET', '/api/daily', async (req, res) => {
 
 route('GET', '/api/teachings', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const q = (req.query.get('q') || '').trim().toLowerCase();
   const type = req.query.get('type') || '';
@@ -305,14 +308,14 @@ route('GET', '/api/teachings', async (req, res) => {
 
 route('POST', '/api/teachings', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const body = await parseJsonBody(req);
-  if (!String(body.content || '').trim()) return err(res, 400, '内容不能为空');
+  if (!String(body.content || '').trim()) return err(res, 400, '鍐呭涓嶈兘涓虹┖');
 
   const rec = {
     id: uid(),
-    type: body.type === '开示' ? '开示' : '偈语',
+    type: body.type === '寮€绀? ? '寮€绀? : '鍋堣',
     title: String(body.title || '').trim(),
     content: String(body.content).trim(),
     source: String(body.source || '').trim(),
@@ -333,20 +336,20 @@ route('POST', '/api/teachings', async (req, res) => {
 
 route('PUT', '/api/teachings/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const { data: rec } = await supabase.from('teachings').select('*').eq('id', req.params.id).single();
-  if (!rec) return err(res, 404, '内容不存在');
+  if (!rec) return err(res, 404, '鍐呭涓嶅瓨鍦?);
 
   const body = await parseJsonBody(req);
   const updates = { updated_at: nowIso() };
   if (body.title !== undefined) updates.title = String(body.title).trim();
   if (body.content !== undefined) {
-    if (!String(body.content).trim()) return err(res, 400, '内容不能为空');
+    if (!String(body.content).trim()) return err(res, 400, '鍐呭涓嶈兘涓虹┖');
     updates.content = String(body.content).trim();
   }
   if (body.source !== undefined) updates.source = String(body.source).trim();
-  if (body.type !== undefined) updates.type = body.type === '开示' ? '开示' : '偈语';
+  if (body.type !== undefined) updates.type = body.type === '寮€绀? ? '寮€绀? : '鍋堣';
   if (body.scheduledDate !== undefined) updates.scheduled_date = body.scheduledDate || null;
 
   await supabase.from('teachings').update(updates).eq('id', rec.id);
@@ -356,28 +359,28 @@ route('PUT', '/api/teachings/:id', async (req, res) => {
 
 route('DELETE', '/api/teachings/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const { data: rec } = await supabase.from('teachings').select('*').eq('id', req.params.id).single();
-  if (!rec) return err(res, 404, '内容不存在');
+  if (!rec) return err(res, 404, '鍐呭涓嶅瓨鍦?);
 
   if (rec.file_name) { try { fs.unlinkSync(path.join(UPLOAD_DIR, rec.file_name)); } catch (e) {} }
   await supabase.from('teachings').delete().eq('id', rec.id);
   json(res, 200, { ok: true });
 });
 
-// ============ 背诵周期 ============
+// ============ 鑳岃鍛ㄦ湡 ============
 route('GET', '/api/cycles', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: cycles } = await supabase.from('cycles').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
 
-  // 补充偈语信息
+  // 琛ュ厖鍋堣淇℃伅
   const result = await Promise.all((cycles || []).map(async (c) => {
     const teachings = await Promise.all((c.teaching_ids || []).map(async (tid) => {
       const { data: t } = await supabase.from('teachings').select('id,title,type').eq('id', tid).single();
-      return t ? { id: t.id, title: t.title, type: t.type } : { id: tid, title: '(已删除)', type: '偈语' };
+      return t ? { id: t.id, title: t.title, type: t.type } : { id: tid, title: '(宸插垹闄?', type: '鍋堣' };
     }));
     return {
       id: c.id, title: c.title, teachingIds: c.teaching_ids, status: c.status,
@@ -390,16 +393,15 @@ route('GET', '/api/cycles', async (req, res) => {
 
 route('POST', '/api/cycles', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const body = await parseJsonBody(req);
   const { data: allTeachings } = await supabase.from('teachings').select('id');
   const validIds = new Set((allTeachings || []).map(t => t.id));
   const ids = Array.isArray(body.teachingIds) ? body.teachingIds.filter(id => validIds.has(id)) : [];
-  if (!ids.length) return err(res, 400, '请至少选择一条偈语/开示');
+  if (!ids.length) return err(res, 400, '璇疯嚦灏戦€夋嫨涓€鏉″亪璇?寮€绀?);
 
-  // 归档之前的活跃周期
-  await supabase.from('cycles').update({ status: 'archived' }).eq('user_id', user.id).eq('status', 'active');
+  // 褰掓。涔嬪墠鐨勬椿璺冨懆鏈?  await supabase.from('cycles').update({ status: 'archived' }).eq('user_id', user.id).eq('status', 'active');
 
   let endDate = body.endDate || null;
   if (!endDate && body.days && parseInt(body.days) > 0) {
@@ -408,21 +410,21 @@ route('POST', '/api/cycles', async (req, res) => {
     endDate = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
   }
 
-  // 把选的第一个内容的日期设成今天
+  // 鎶婇€夌殑绗竴涓唴瀹圭殑鏃ユ湡璁炬垚浠婂ぉ
   await supabase.from('teachings').update({ scheduled_date: todayStr() }).eq('id', ids[0]);
 
   const cycle = {
-    id: uid(), user_id: user.id, title: body.title || ('周期 ' + todayStr()),
+    id: uid(), user_id: user.id, title: body.title || ('鍛ㄦ湡 ' + todayStr()),
     teaching_ids: ids, status: 'active', start_date: todayStr(), end_date: endDate,
   };
   const { data: created } = await supabase.from('cycles').insert(cycle).select().single();
   json(res, 200, { cycle: created });
 });
 
-// ============ 打卡 ============
+// ============ 鎵撳崱 ============
 route('POST', '/api/checkins', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const body = await parseJsonBody(req);
   const today = todayStr();
@@ -439,7 +441,7 @@ route('POST', '/api/checkins', async (req, res) => {
 
 route('GET', '/api/checkins/today', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const today = todayStr();
   const { data: allUsers } = await supabase.from('users').select('*').order('username', { ascending: true });
@@ -461,16 +463,16 @@ route('GET', '/api/checkins/today', async (req, res) => {
 
 route('GET', '/api/checkins/mine', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: list } = await supabase.from('checkins').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
   json(res, 200, { checkins: list || [] });
 });
 
-// ============ 善叙述 ============
+// ============ 鍠勫彊杩?============
 route('GET', '/api/gooddeeds', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: list } = await supabase.from('gooddeeds').select('*').order('updated_at', { ascending: false });
 
@@ -487,7 +489,7 @@ route('GET', '/api/gooddeeds', async (req, res) => {
 
     return {
       id: gd.id,
-      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(宸茬Щ闄?', role: 'member' },
       content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
       attachments: gd.attachments || [],
       teachingId: gd.teaching_id || null,
@@ -503,7 +505,7 @@ route('GET', '/api/gooddeeds', async (req, res) => {
 
 route('GET', '/api/gooddeeds/mine', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: list } = await supabase.from('gooddeeds').select('*').eq('user_id', user.id).order('updated_at', { ascending: false });
 
@@ -534,11 +536,11 @@ route('GET', '/api/gooddeeds/mine', async (req, res) => {
 
 route('POST', '/api/gooddeeds', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const body = await parseJsonBody(req);
   const content = String(body.content || '').trim();
-  if (!content) return err(res, 400, '善叙述内容不能为空');
+  if (!content) return err(res, 400, '鍠勫彊杩板唴瀹逛笉鑳戒负绌?);
 
   const today = todayStr();
   const { data: todayCheckin } = await supabase.from('checkins').select('id').eq('user_id', user.id).eq('date', today).order('created_at', { ascending: false }).limit(1).single();
@@ -566,15 +568,15 @@ route('POST', '/api/gooddeeds', async (req, res) => {
 
 route('PUT', '/api/gooddeeds/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: gd } = await supabase.from('gooddeeds').select('*').eq('id', req.params.id).single();
-  if (!gd) return err(res, 404, '善叙述不存在');
-  if (gd.user_id !== user.id) return err(res, 403, '只能更新自己的善叙述');
+  if (!gd) return err(res, 404, '鍠勫彊杩颁笉瀛樺湪');
+  if (gd.user_id !== user.id) return err(res, 403, '鍙兘鏇存柊鑷繁鐨勫杽鍙欒堪');
 
   const body = await parseJsonBody(req);
   const content = String(body.content || '').trim();
-  if (!content) return err(res, 400, '内容不能为空');
+  if (!content) return err(res, 400, '鍐呭涓嶈兘涓虹┖');
 
   const updates = {
     content,
@@ -587,10 +589,10 @@ route('PUT', '/api/gooddeeds/:id', async (req, res) => {
 
 route('GET', '/api/gooddeeds/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: gd } = await supabase.from('gooddeeds').select('*').eq('id', req.params.id).single();
-  if (!gd) return err(res, 404, '善叙述不存在');
+  if (!gd) return err(res, 404, '鍠勫彊杩颁笉瀛樺湪');
 
   await pruneGoodDeedVersions(gd);
   const { data: author } = await supabase.from('users').select('*').eq('id', gd.user_id).single();
@@ -599,7 +601,7 @@ route('GET', '/api/gooddeeds/:id', async (req, res) => {
   json(res, 200, {
     gooddeed: {
       id: gd.id,
-      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(宸茬Щ闄?', role: 'member' },
       attachments: gd.attachments || [],
       versions: gd.versions,
       content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
@@ -607,22 +609,22 @@ route('GET', '/api/gooddeeds/:id', async (req, res) => {
     },
     feedback: (feedbackList || []).map(f => ({
       id: f.id, content: f.content, createdAt: f.created_at,
-      author: f.users?.username || '(已移除)'
+      author: f.users?.username || '(宸茬Щ闄?'
     }))
   });
 });
 
-// 善叙述附件：追加
+// 鍠勫彊杩伴檮浠讹細杩藉姞
 route('POST', '/api/gooddeeds/:id/attachments', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: gd } = await supabase.from('gooddeeds').select('*').eq('id', req.params.id).single();
-  if (!gd) return err(res, 404, '善叙述不存在');
-  if (gd.user_id !== user.id) return err(res, 403, '只能给自己的善叙述添加附件');
+  if (!gd) return err(res, 404, '鍠勫彊杩颁笉瀛樺湪');
+  if (gd.user_id !== user.id) return err(res, 403, '鍙兘缁欒嚜宸辩殑鍠勫彊杩版坊鍔犻檮浠?);
 
   const body = await parseJsonBody(req);
-  if (!body.name || !body.data) return err(res, 400, '缺少文件');
+  if (!body.name || !body.data) return err(res, 400, '缂哄皯鏂囦欢');
 
   const r = saveAttachment(Buffer.from(String(body.data), 'base64'), body.name);
   if (r.error) return err(res, 400, r.error);
@@ -632,17 +634,17 @@ route('POST', '/api/gooddeeds/:id/attachments', async (req, res) => {
   json(res, 200, { attachments });
 });
 
-// 善叙述附件：删除
+// 鍠勫彊杩伴檮浠讹細鍒犻櫎
 route('DELETE', '/api/gooddeeds/:id/attachments/:attId', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: gd } = await supabase.from('gooddeeds').select('*').eq('id', req.params.id).single();
-  if (!gd) return err(res, 404, '善叙述不存在');
-  if (gd.user_id !== user.id) return err(res, 403, '只能删除自己善叙述的附件');
+  if (!gd) return err(res, 404, '鍠勫彊杩颁笉瀛樺湪');
+  if (gd.user_id !== user.id) return err(res, 403, '鍙兘鍒犻櫎鑷繁鍠勫彊杩扮殑闄勪欢');
 
   const att = (gd.attachments || []).find(a => a.id === req.params.attId);
-  if (!att) return err(res, 404, '附件不存在');
+  if (!att) return err(res, 404, '闄勪欢涓嶅瓨鍦?);
 
   const attachments = (gd.attachments || []).filter(a => a.id !== req.params.attId);
   await supabase.from('gooddeeds').update({ attachments }).eq('id', gd.id);
@@ -650,14 +652,13 @@ route('DELETE', '/api/gooddeeds/:id/attachments/:attId', async (req, res) => {
   json(res, 200, { ok: true });
 });
 
-// 删除整条善叙述
-route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
+// 鍒犻櫎鏁存潯鍠勫彊杩?route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: gd } = await supabase.from('gooddeeds').select('*').eq('id', req.params.id).single();
-  if (!gd) return err(res, 404, '善叙述不存在');
-  if (gd.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能删除自己的善叙述');
+  if (!gd) return err(res, 404, '鍠勫彊杩颁笉瀛樺湪');
+  if (gd.user_id !== user.id && user.role !== 'admin') return err(res, 403, '鍙兘鍒犻櫎鑷繁鐨勫杽鍙欒堪');
 
   (gd.attachments || []).forEach(a => { try { fs.unlinkSync(path.join(UPLOAD_DIR, a.fileName)); } catch (e) {} });
   await supabase.from('feedback').delete().eq('target_type', 'gooddeed').eq('target_id', gd.id);
@@ -665,17 +666,17 @@ route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
   json(res, 200, { ok: true });
 });
 
-// ============ 反馈 ============
+// ============ 鍙嶉 ============
 route('POST', '/api/feedback', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const body = await parseJsonBody(req);
   const type = String(body.targetType || '');
   const targetId = String(body.targetId || '');
-  if (!['teaching', 'checkin', 'gooddeed'].includes(type)) return err(res, 400, 'targetType 无效');
+  if (!['teaching', 'checkin', 'gooddeed'].includes(type)) return err(res, 400, 'targetType 鏃犳晥');
   const content = String(body.content || '').trim();
-  if (!content) return err(res, 400, '反馈内容不能为空');
+  if (!content) return err(res, 400, '鍙嶉鍐呭涓嶈兘涓虹┖');
 
   const rec = {
     id: uid(), user_id: user.id, target_type: type, target_id: targetId,
@@ -687,7 +688,7 @@ route('POST', '/api/feedback', async (req, res) => {
 
 route('GET', '/api/feedback', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const type = req.query.get('targetType') || '';
   const targetId = req.query.get('targetId') || '';
@@ -701,22 +702,22 @@ route('GET', '/api/feedback', async (req, res) => {
     feedback: (list || []).map(f => ({
       id: f.id, targetType: f.target_type, targetId: f.target_id,
       content: f.content, createdAt: f.created_at,
-      author: f.users?.username || '(已移除)'
+      author: f.users?.username || '(宸茬Щ闄?'
     }))
   });
 });
 
 route('PUT', '/api/feedback/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: f } = await supabase.from('feedback').select('*').eq('id', req.params.id).single();
-  if (!f) return err(res, 404, '反馈不存在');
-  if (f.user_id !== user.id) return err(res, 403, '只能编辑自己的反馈');
+  if (!f) return err(res, 404, '鍙嶉涓嶅瓨鍦?);
+  if (f.user_id !== user.id) return err(res, 403, '鍙兘缂栬緫鑷繁鐨勫弽棣?);
 
   const body = await parseJsonBody(req);
   const content = String(body.content || '').trim();
-  if (!content) return err(res, 400, '内容不能为空');
+  if (!content) return err(res, 400, '鍐呭涓嶈兘涓虹┖');
 
   await supabase.from('feedback').update({ content, updated_at: nowIso() }).eq('id', f.id);
   json(res, 200, { feedback: { ...f, content } });
@@ -724,23 +725,23 @@ route('PUT', '/api/feedback/:id', async (req, res) => {
 
 route('DELETE', '/api/feedback/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!user) return err(res, 401, '未登录');
+  if (!user) return err(res, 401, '鏈櫥褰?);
 
   const { data: f } = await supabase.from('feedback').select('*').eq('id', req.params.id).single();
-  if (!f) return err(res, 404, '反馈不存在');
-  if (f.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能删除自己的反馈');
+  if (!f) return err(res, 404, '鍙嶉涓嶅瓨鍦?);
+  if (f.user_id !== user.id && user.role !== 'admin') return err(res, 403, '鍙兘鍒犻櫎鑷繁鐨勫弽棣?);
 
   await supabase.from('feedback').delete().eq('id', f.id);
   json(res, 200, { ok: true });
 });
 
-// ============ 文档文本提取 ============
+// ============ 鏂囨。鏂囨湰鎻愬彇 ============
 function extractDocxText(base64Data, originalName) {
   return new Promise((resolve, reject) => {
     const ext = (path.extname(String(originalName || '')) || '').toLowerCase();
-    if (ext === '.pdf') return resolve({ text: null, note: 'PDF 暂不支持自动提取，请手动复制内容到文本框' });
-    if (ext === '.doc') return resolve({ text: null, note: '旧版 .doc 暂不支持，请另存为 .docx 后上传' });
-    if (ext !== '.docx') return resolve({ text: null, note: '仅 .docx 支持自动提取文字' });
+    if (ext === '.pdf') return resolve({ text: null, note: 'PDF 鏆備笉鏀寔鑷姩鎻愬彇锛岃鎵嬪姩澶嶅埗鍐呭鍒版枃鏈' });
+    if (ext === '.doc') return resolve({ text: null, note: '鏃х増 .doc 鏆備笉鏀寔锛岃鍙﹀瓨涓?.docx 鍚庝笂浼? });
+    if (ext !== '.docx') return resolve({ text: null, note: '浠?.docx 鏀寔鑷姩鎻愬彇鏂囧瓧' });
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatha-extract-'));
     const tmpZip = path.join(tmpDir, 'input.zip');
@@ -753,10 +754,10 @@ function extractDocxText(base64Data, originalName) {
       : ['unzip', '-o', tmpZip, '-d', expandDir];
 
     execFile(expandCmd[0], expandCmd.slice(1), { timeout: 15000 }, (err) => {
-      if (err) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return reject(new Error('解压文档失败，请确认是有效的 .docx 文件')); }
+      if (err) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return reject(new Error('瑙ｅ帇鏂囨。澶辫触锛岃纭鏄湁鏁堢殑 .docx 鏂囦欢')); }
       try {
         const xmlPath = path.join(expandDir, 'unzipped', 'word', 'document.xml');
-        if (!fs.existsSync(xmlPath)) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return resolve({ text: null, note: '未在文档中找到文本内容' }); }
+        if (!fs.existsSync(xmlPath)) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return resolve({ text: null, note: '鏈湪鏂囨。涓壘鍒版枃鏈唴瀹? }); }
         const xml = fs.readFileSync(xmlPath, 'utf8');
         const paragraphs = xml.split(/<w:p[ >]/).slice(1);
         const lines = paragraphs.map(p => {
@@ -765,28 +766,28 @@ function extractDocxText(base64Data, originalName) {
         }).filter(line => line.trim().length > 0);
         const text = lines.join('\n').trim();
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-        if (!text) return resolve({ text: null, note: '文档中未提取到文字（可能是图片型文档）' });
+        if (!text) return resolve({ text: null, note: '鏂囨。涓湭鎻愬彇鍒版枃瀛楋紙鍙兘鏄浘鐗囧瀷鏂囨。锛? });
         resolve({ text });
-      } catch (e) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e2) {} reject(new Error('读取文档内容失败')); }
+      } catch (e) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e2) {} reject(new Error('璇诲彇鏂囨。鍐呭澶辫触')); }
     });
   });
 }
 
 route('POST', '/api/admin/extract-doc', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
   const body = await parseJsonBody(req);
-  if (!body.name || !body.data) return err(res, 400, '缺少文件');
+  if (!body.name || !body.data) return err(res, 400, '缂哄皯鏂囦欢');
   try {
     const r = await extractDocxText(body.data, body.name);
     json(res, 200, r);
   } catch (e) { err(res, 400, e.message); }
 });
 
-// ============ 管理 ============
+// ============ 绠＄悊 ============
 route('GET', '/api/admin/users', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const today = todayStr();
   const { data: allUsers } = await supabase.from('users').select('*').order('username', { ascending: true });
@@ -806,17 +807,17 @@ route('GET', '/api/admin/users', async (req, res) => {
 
 route('PUT', '/api/admin/users/:id/role', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const { data: target } = await supabase.from('users').select('*').eq('id', req.params.id).single();
-  if (!target) return err(res, 404, '用户不存在');
+  if (!target) return err(res, 404, '鐢ㄦ埛涓嶅瓨鍦?);
 
   const body = await parseJsonBody(req);
   const role = body.role === 'admin' ? 'admin' : 'member';
 
   if (role !== 'admin' && target.role === 'admin') {
     const { count } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin');
-    if (count <= 1) return err(res, 400, '至少保留一名管理员');
+    if (count <= 1) return err(res, 400, '鑷冲皯淇濈暀涓€鍚嶇鐞嗗憳');
   }
 
   await supabase.from('users').update({ role }).eq('id', target.id);
@@ -825,15 +826,15 @@ route('PUT', '/api/admin/users/:id/role', async (req, res) => {
 
 route('DELETE', '/api/admin/users/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
-  if (req.params.id === user.id) return err(res, 400, '不能移除自己');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
+  if (req.params.id === user.id) return err(res, 400, '涓嶈兘绉婚櫎鑷繁');
 
   const { data: target } = await supabase.from('users').select('*').eq('id', req.params.id).single();
-  if (!target) return err(res, 404, '用户不存在');
+  if (!target) return err(res, 404, '鐢ㄦ埛涓嶅瓨鍦?);
 
   if (target.role === 'admin') {
     const { count } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin');
-    if (count <= 1) return err(res, 400, '至少保留一名管理员');
+    if (count <= 1) return err(res, 400, '鑷冲皯淇濈暀涓€鍚嶇鐞嗗憳');
   }
 
   await supabase.from('checkins').delete().eq('user_id', target.id);
@@ -848,11 +849,11 @@ route('DELETE', '/api/admin/users/:id', async (req, res) => {
 
 route('PUT', '/api/admin/settings', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const body = await parseJsonBody(req);
   const limit = parseInt(body.memberLimit, 10);
-  if (!(limit >= 1 && limit <= 500)) return err(res, 400, '人数上限需为 1-500');
+  if (!(limit >= 1 && limit <= 500)) return err(res, 400, '浜烘暟涓婇檺闇€涓?1-500');
 
   await supabase.from('settings').update({ member_limit: limit }).eq('id', 1);
   const { data: settings } = await supabase.from('settings').select('*').eq('id', 1).single();
@@ -861,23 +862,23 @@ route('PUT', '/api/admin/settings', async (req, res) => {
 
 route('GET', '/api/admin/checkins', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   const { data: list } = await supabase.from('checkins').select('*, users(username)').order('created_at', { ascending: false });
   json(res, 200, {
-    checkins: (list || []).map(c => ({ ...c, username: c.users?.username || '(已移除)' }))
+    checkins: (list || []).map(c => ({ ...c, username: c.users?.username || '(宸茬Щ闄?' }))
   });
 });
 
 route('DELETE', '/api/admin/checkins/:id', async (req, res) => {
   const user = await authUser(req);
-  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (!isAdmin(user)) return err(res, 403, '闇€瑕佺鐞嗗憳鏉冮檺');
 
   await supabase.from('checkins').delete().eq('id', req.params.id);
   json(res, 200, { ok: true });
 });
 
-// ---------------- 静态文件 ----------------
+// ---------------- 闈欐€佹枃浠?----------------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
@@ -886,22 +887,22 @@ const MIME = {
 };
 
 function serveFile(res, absPath) {
-  if (!absPath || !fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return err(res, 404, '文件不存在');
+  if (!absPath || !fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return err(res, 404, '鏂囦欢涓嶅瓨鍦?);
   const ext = path.extname(absPath).toLowerCase();
   res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
   fs.createReadStream(absPath).pipe(res);
 }
 
-// ---------------- 服务器 ----------------
+// ---------------- 鏈嶅姟鍣?----------------
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     const pathname = decodeURIComponent(url.pathname);
 
     if (req.method === 'GET') {
-      if (pathname === '/' || pathname === '/index.html') return serveFile(res, path.join(__dirname, 'public', 'index.html'));
+      if (pathname === '/' || pathname === '/index.html') return serveFile(res, path.join(__dirname, 'index.html'));
       if (pathname.startsWith('/static/')) {
-        const p = safeJoin(path.join(__dirname, 'public'), pathname.slice('/static/'.length));
+        const p = safeJoin(__dirname, pathname.slice('/static/'.length));
         return serveFile(res, p);
       }
       if (pathname.startsWith('/uploads/')) {
@@ -924,11 +925,11 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: 'Not found' });
   } catch (e) {
     const status = e.status || 500;
-    json(res, status, { error: e.message || '服务器错误' });
+    json(res, status, { error: e.message || '鏈嶅姟鍣ㄩ敊璇? });
   }
 });
 
-// ---------------- 首次启动种子数据 ----------------
+// ---------------- 棣栨鍚姩绉嶅瓙鏁版嵁 ----------------
 async function seed() {
   const { count: userCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
   if (userCount === 0) {
@@ -937,25 +938,26 @@ async function seed() {
       id: uid(), username: 'admin', salt,
       password_hash: hashPassword('admin123', salt), role: 'admin', telegram_id: null,
     });
-    console.log('[Seed] 已创建管理员账号: admin / admin123');
+    console.log('[Seed] 宸插垱寤虹鐞嗗憳璐﹀彿: admin / admin123');
   }
 
   const { count: teachingCount } = await supabase.from('teachings').select('*', { count: 'exact', head: true });
   if (teachingCount === 0) {
     await supabase.from('teachings').insert([
-      { id: uid(), type: '偈语', title: '七佛通诫偈', content: '诸恶莫作，众善奉行；自净其意，是诸佛教。', source: '《增一阿含经》' },
-      { id: uid(), type: '开示', title: '心念如镜', content: '心念如镜，尘来尘去，镜体不动；观照而不随转，即是修行。', source: '示例开示（可删除）' },
+      { id: uid(), type: '鍋堣', title: '涓冧經閫氳鍋?, content: '璇告伓鑾綔锛屼紬鍠勫琛岋紱鑷噣鍏舵剰锛屾槸璇镐經鏁欍€?, source: '銆婂涓€闃垮惈缁忋€? },
+      { id: uid(), type: '寮€绀?, title: '蹇冨康濡傞暅', content: '蹇冨康濡傞暅锛屽皹鏉ュ皹鍘伙紝闀滀綋涓嶅姩锛涜鐓ц€屼笉闅忚浆锛屽嵆鏄慨琛屻€?, source: '绀轰緥寮€绀猴紙鍙垹闄わ級' },
     ]);
-    console.log('[Seed] 已插入示例偈语');
+    console.log('[Seed] 宸叉彃鍏ョず渚嬪亪璇?);
   }
 }
 
 seed().then(() => {
   server.listen(config.PORT, () => {
     console.log('==========================================');
-    console.log('  偈语背诵打卡 · Supabase 版已启动');
-    console.log(`  地址: http://localhost:${config.PORT}`);
-    console.log(`  管理员: admin / admin123（首次启动自动创建）`);
+    console.log('  鍋堣鑳岃鎵撳崱 路 Supabase 鐗堝凡鍚姩');
+    console.log(`  鍦板潃: http://localhost:${config.PORT}`);
+    console.log(`  绠＄悊鍛? admin / admin123锛堥娆″惎鍔ㄨ嚜鍔ㄥ垱寤猴級`);
     console.log('==========================================');
   });
 });
+
