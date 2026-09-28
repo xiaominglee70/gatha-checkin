@@ -151,43 +151,47 @@ function route(method, pattern, handler) {
 
 // ============ 认证 ============
 route('POST', '/api/auth/login', async (req, res) => {
-  const body = await parseJsonBody(req);
-  const username = String(body.username || '').trim();
-  if (!username || username.length > 30) return err(res, 400, '用户名需为 1-30 个字符');
+  try {
+    const body = await parseJsonBody(req);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+    console.log('[Login] 尝试登录:', username);
 
-  const { data: settings } = await supabase.from('settings').select('member_limit').eq('id', 1).single();
-  const memberLimit = settings?.member_limit || 15;
+    const { data: user, error: userErr } = await supabase
+      .from('users')
+      .select('*')
+      .eq('username', username)
+      .single();
 
-  let { data: user } = await supabase.from('users').select('*').eq('username', username).single();
+    console.log('[Login] 查询结果:', user, '错误:', userErr);
 
-  if (!user) {
-    const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
-    if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
-
-    const salt = crypto.randomBytes(12).toString('hex');
-    const newUser = {
-      id: uid(),
-      username,
-      salt,
-      password_hash: body.password ? hashPassword(String(body.password), salt) : null,
-      role: count === 0 ? 'admin' : 'member',
-      telegram_id: null,
-    };
-    const { data: created } = await supabase.from('users').insert(newUser).select().single();
-    user = created;
-  } else {
-    if (user.password_hash) {
-      if (!body.password || hashPassword(String(body.password), user.salt) !== user.password_hash) return err(res, 401, '密码错误');
+    if (!user) {
+      return err(res, 404, '用户不存在: ' + username);
     }
+
+    if (user.password_hash) {
+      const salt = user.salt;
+      const hash = crypto.createHash('sha256').update(salt + ':' + password).digest('hex');
+      console.log('[Login] 密码验证:', hash === user.password_hash ? '通过' : '失败');
+      if (hash !== user.password_hash) {
+        return err(res, 401, '密码错误');
+      }
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const { error: sessErr } = await supabase.from('sessions').insert({ token, user_id: user.id });
+    console.log('[Login] 创建session:', sessErr ? '失败: ' + JSON.stringify(sessErr) : '成功');
+
+    json(res, 200, {
+      token,
+      user: { id: user.id, username: user.username, role: user.role, telegramId: user.telegram_id, createdAt: user.created_at }
+    });
+  } catch (e) {
+    console.error('[Login] 异常:', e);
+    err(res, 500, e.message + ' | ' + e.stack);
   }
-
-  const token = crypto.randomBytes(32).toString('hex');
-  await supabase.from('sessions').insert({ token, user_id: user.id });
-
-  json(res, 200, { token, user: publicUser(user) });
 });
-
-route('POST', '/api/auth/telegram', async (req, res) => {
+route('POST', '/api/auth/telegram, async (req, res) => {
   if (!config.BOT_TOKEN) return err(res, 500, 'BOT_TOKEN 未配置');
   const body = await parseJsonBody(req);
   const tgUser = verifyInitData(String(body.initData || ''), config.BOT_TOKEN);
