@@ -455,10 +455,10 @@ async function downloadTeaching(id) {
   const p = n => String(n).padStart(2, '0');
   const dateStr = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
   const header = `${t.type} · ${t.title || '(无标题)'}\n${t.source ? '来源：' + t.source + '\n' : ''}${'='.repeat(40)}\n\n`;
-  const blob = new Blob([header + t.content], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([header + t.content], { type: 'application/msword' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${t.type}_${t.title || '内容'}_${dateStr}.txt`;
+  a.download = `${t.type}_${t.title || '内容'}_${dateStr}.doc`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
