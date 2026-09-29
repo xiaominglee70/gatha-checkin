@@ -231,12 +231,16 @@ function renderTeachingList(list, cycles) {
   // 每条内容所在进行中周期的日期区间（只取日期，去掉时间）
   const day = s => String(s || '').slice(0, 10);
   const rangeById = {};
+  window.cycleIdByTeaching = {};
   (cycles || []).forEach(cy => {
     if (cy.status !== 'active') return;
     const s = day(cy.startDate);
     const e = cy.endDate ? day(cy.endDate) : '';
     (cy.teachingIds || []).forEach(tid => {
-      if (!rangeById[tid]) rangeById[tid] = e ? (s === e ? s : (s + ' ~ ' + e)) : (s + ' ~ 长期');
+      if (!rangeById[tid]) {
+        rangeById[tid] = e ? (s === e ? s : (s + ' ~ ' + e)) : (s + ' ~ 长期');
+        window.cycleIdByTeaching[tid] = cy.id;
+      }
     });
   });
   box.innerHTML = `
@@ -296,10 +300,14 @@ function togglePickFromCheckbox(id, checked) {
 }
 window.togglePickFromCheckbox = togglePickFromCheckbox;
 
-// 撤销选择
+// 撤销选择：若该条已在进行中的周期内，则真正撤销安排（删除周期）；否则仅取消勾选
 function unpickTeaching(ev, id) {
   ev.preventDefault();
   ev.stopPropagation();
+  if (window.cycleIdByTeaching && window.cycleIdByTeaching[id]) {
+    deleteCycleForTeaching(id);
+    return;
+  }
   togglePickFromCheckbox(id, false);
 }
 window.unpickTeaching = unpickTeaching;
