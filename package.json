@@ -1,13 +1,13 @@
 {
   "name": "gatha-checkin",
   "version": "1.0.0",
-  "description": "偈语背诵打卡小程序 · Supabase 版",
+  "description": "偈语背诵打卡小程序",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0"
+    "pg": "^8.11.0"
   },
   "engines": {
     "node": ">=18"
