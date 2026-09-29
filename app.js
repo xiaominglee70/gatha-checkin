@@ -210,26 +210,40 @@ async function renderTeachings(c) {
       <div class="field"><input id="tg-search" type="text" placeholder="搜索${state.tgType === '开示' ? '开示' : '偈语'}…" value="${esc(state.q || '')}"></div>
     </div>
     <div id="tg-list"><div class="empty">加载中…</div></div>`;
+  const cyclesData = await api('/api/cycles');
+  const loadList = async () => {
+    const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
+    renderTeachingList(d.teachings, cyclesData.cycles || []);
+  };
   document.getElementById('tg-search').addEventListener('input', debounce(async () => {
     state.q = document.getElementById('tg-search').value.trim();
-    const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
-    renderTeachingList(d.teachings);
+    loadList();
   }, 300));
-  const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
-  renderTeachingList(d.teachings);
+  loadList();
 }
 
 function tgTabSwitch(t) { state.tgType = t; state.q = ''; state.picks = []; renderView(); }
 window.tgTabSwitch = tgTabSwitch;
 
-function renderTeachingList(list) {
+function renderTeachingList(list, cycles) {
   const box = document.getElementById('tg-list');
   if (!list.length) { box.innerHTML = '<div class="empty">这个库里还没有内容</div>'; return; }
+  // 每条内容所在进行中周期的日期区间（只取日期，去掉时间）
+  const day = s => String(s || '').slice(0, 10);
+  const rangeById = {};
+  (cycles || []).forEach(cy => {
+    if (cy.status !== 'active') return;
+    const s = day(cy.startDate);
+    const e = cy.endDate ? day(cy.endDate) : '';
+    (cy.teachingIds || []).forEach(tid => {
+      if (!rangeById[tid]) rangeById[tid] = e ? (s + ' ~ ' + e) : (s + ' ~ 长期');
+    });
+  });
   box.innerHTML = `
     <div class="section-title">${state.tgType === '开示' ? '开示' : '偈语'}（${list.length}）</div>
     <div class="card"><div class="section-title" style="margin:0 0 6px">选择内容开始背诵周期</div>
       <div class="checkbox-list" id="cycle-pick">
-        ${list.map(t => `<label><input type="checkbox" value="${t.id}"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(t.scheduledDate) + '）' : ''}</span></label>`).join('')}
+        ${list.map(t => `<label><input type="checkbox" value="${t.id}"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span></label>`).join('')}
       </div>
       <div class="form-actions" style="margin-top:10px">
         <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px">
@@ -239,7 +253,7 @@ function renderTeachingList(list) {
     ${list.map(t => `
       <div class="item">
         <div class="head"><span class="title">${esc(t.type)} · ${esc(t.title || '(无标题)')}</span></div>
-        <div class="meta">${t.scheduledDate ? '发布安排：' + esc(t.scheduledDate) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}</div>
+        <div class="meta">${rangeById[t.id] ? '周期：' + esc(rangeById[t.id]) + '　' : ''}${!rangeById[t.id] && t.scheduledDate ? '发布安排：' + esc(day(t.scheduledDate)) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}</div>
         <div class="body">${esc(t.content)}</div>
         <div class="actions">
           <button class="btn small ghost" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>

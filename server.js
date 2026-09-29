@@ -444,11 +444,13 @@ route('POST', '/api/cycles', async (req, res) => {
   // 把选的第一个内容的日期设成今天
   await pool.query('UPDATE teachings SET scheduled_date = $1 WHERE id = $2', [todayStr(), ids[0]]);
 
-  const cycle = {
-    id: uid(), user_id: user.id, title: body.title || ('周期 ' + todayStr()),
-    teaching_ids: ids, status: 'active', start_date: todayStr(), end_date: endDate,
-  };
-  const created = await insertRow('cycles', cycle);
+  // teaching_ids 是 PostgreSQL 数组列，必须以数组参数传入（pg 驱动自动转成 {..} 格式），
+  // 不能走 prepVal 的 JSON.stringify，否则会报 malformed array literal
+  const created = await qOne(
+    `INSERT INTO cycles (id, user_id, title, teaching_ids, status, start_date, end_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [uid(), user.id, body.title || ('周期 ' + todayStr()), ids, 'active', todayStr(), endDate]
+  );
   json(res, 200, { cycle: created });
 });
 
