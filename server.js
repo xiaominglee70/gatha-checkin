@@ -433,6 +433,8 @@ route('POST', '/api/cycles', async (req, res) => {
     endDate = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
   }
 
+  // 清除今天已有的旧安排，避免首页显示过期的偈语/开示
+  await pool.query('UPDATE teachings SET scheduled_date = NULL WHERE scheduled_date = $1', [todayStr()]);
   // 把选的第一个内容的日期设成今天
   await pool.query('UPDATE teachings SET scheduled_date = $1 WHERE id = $2', [todayStr(), ids[0]]);
 
@@ -446,7 +448,22 @@ route('POST', '/api/cycles', async (req, res) => {
   json(res, 200, { cycle: created });
 });
 
-// ============ 打卡 ============
+// 撤销安排：删除包含该内容的进行中周期，并清除其今日安排
+route('DELETE', '/api/cycles/by-teaching/:tid', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+  const tid = req.params.tid;
+  const cycle = await qOne(
+    'SELECT * FROM cycles WHERE user_id = $1 AND status = $2 AND $3::uuid = ANY(teaching_ids) ORDER BY created_at DESC LIMIT 1',
+    [user.id, 'active', tid]
+  );
+  if (!cycle) return err(res, 404, '未找到包含该内容的进行中周期');
+  await pool.query('UPDATE teachings SET scheduled_date = NULL WHERE id = $1', [tid]);
+  await pool.query('DELETE FROM cycles WHERE id = $1', [cycle.id]);
+  json(res, 200, { ok: true });
+});
+
+// ============ 打卡 ===========
 route('POST', '/api/checkins', async (req, res) => {
   const user = await authUser(req);
   if (!user) return err(res, 401, '未登录');

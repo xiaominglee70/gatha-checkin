@@ -253,7 +253,7 @@ function renderTeachingList(list, cycles) {
     ${list.map(t => `
       <div class="item">
         <div class="head"><span class="title">${esc(t.type)} · ${esc(t.title || '(无标题)')}</span></div>
-        <div class="meta">${rangeById[t.id] ? '周期：' + esc(rangeById[t.id]) + '　' : ''}${!rangeById[t.id] && t.scheduledDate ? '发布安排：' + esc(day(t.scheduledDate)) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}</div>
+        <div class="meta">${rangeById[t.id] ? '周期：' + esc(rangeById[t.id]) + '　' : ''}${!rangeById[t.id] && t.scheduledDate ? '发布安排：' + esc(day(t.scheduledDate)) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}${rangeById[t.id] && state.user && state.user.role === 'admin' ? '<button class="btn small danger" style="margin-left:6px" onclick="deleteCycleForTeaching(\'' + t.id + '\')">撤销安排</button>' : ''}</div>
         <div class="body">${esc(t.content)}</div>
         <div class="actions">
           <button class="btn small ghost" data-pick="${t.id}" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
@@ -337,6 +337,17 @@ function updatePreview() {
     if (el) { el.textContent = ' 将安排：' + text; el.style.display = 'inline'; }
   });
 }
+
+// 撤销安排：删除包含该内容的活动周期（管理员用）
+async function deleteCycleForTeaching(tid) {
+  if (!confirm('撤销安排会删除该内容所在的整个背诵周期，且首页不再显示。确定吗？')) return;
+  try {
+    await api('/api/cycles/by-teaching/' + encodeURIComponent(tid), { method: 'DELETE' });
+    toast('已撤销安排');
+    renderView();
+  } catch (e) { toast(e.message); }
+}
+window.deleteCycleForTeaching = deleteCycleForTeaching;
 
 async function startCycle() {
   state.picks = state.picks || [];
