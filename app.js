@@ -243,7 +243,7 @@ function renderTeachingList(list, cycles) {
     <div class="section-title">${state.tgType === '开示' ? '开示' : '偈语'}（${list.length}）</div>
     <div class="card"><div class="section-title" style="margin:0 0 6px">选择内容开始背诵周期</div>
       <div class="checkbox-list" id="cycle-pick">
-        ${list.map(t => `<label><input type="checkbox" value="${t.id}"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span></label>`).join('')}
+        ${list.map(t => `<label><input type="checkbox" value="${t.id}" onchange="togglePickFromCheckbox('${t.id}', this.checked)"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span><button type="button" class="btn small danger undo-btn" id="undo-${t.id}" style="${isPicked(t.id) ? '' : 'display:none'}" onclick="unpickTeaching(event, '${t.id}')">撤销</button></label>`).join('')}
       </div>
       <div class="form-actions" style="margin-top:10px">
         <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px">
@@ -256,7 +256,7 @@ function renderTeachingList(list, cycles) {
         <div class="meta">${rangeById[t.id] ? '周期：' + esc(rangeById[t.id]) + '　' : ''}${!rangeById[t.id] && t.scheduledDate ? '发布安排：' + esc(day(t.scheduledDate)) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}</div>
         <div class="body">${esc(t.content)}</div>
         <div class="actions">
-          <button class="btn small ghost" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
+          <button class="btn small ghost" data-pick="${t.id}" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
           <button class="btn small primary" onclick="writeGooddeedFromTeaching('${t.id}','${esc(t.title || '(无标题)').replace(/'/g, "\\'")}','${esc(t.type)}')">写善叙述</button>
           <button class="btn small ghost" onclick="downloadTeaching('${t.id}')">下载</button>
           ${state.user && state.user.role === 'admin' ? `
@@ -277,15 +277,42 @@ function renderTeachingList(list, cycles) {
 function isPicked(id) { return state.picks && state.picks.includes(id); }
 
 function togglePick(btn, id) {
+  const picked = btn.textContent !== '✓ 已选';
   state.picks = state.picks || [];
   const i = state.picks.indexOf(id);
-  if (i >= 0) { state.picks.splice(i, 1); btn.textContent = '加入周期'; }
-  else { state.picks.push(id); btn.textContent = '✓ 已选'; }
-  // 同步勾选框
-  const cb = document.querySelector(`#cycle-pick input[value="${id}"]`);
-  if (cb) cb.checked = i < 0;
+  if (picked && i < 0) state.picks.push(id);
+  if (!picked && i >= 0) state.picks.splice(i, 1);
+  updatePickUI(id, picked);
 }
 window.togglePick = togglePick;
+
+// 复选框勾选/取消：同步选择状态
+function togglePickFromCheckbox(id, checked) {
+  state.picks = state.picks || [];
+  const i = state.picks.indexOf(id);
+  if (checked && i < 0) state.picks.push(id);
+  if (!checked && i >= 0) state.picks.splice(i, 1);
+  updatePickUI(id, checked);
+}
+window.togglePickFromCheckbox = togglePickFromCheckbox;
+
+// 撤销选择
+function unpickTeaching(ev, id) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  togglePickFromCheckbox(id, false);
+}
+window.unpickTeaching = unpickTeaching;
+
+// 同步勾选框、撤销按钮、条目标题按钮三处状态
+function updatePickUI(id, picked) {
+  const cb = document.querySelector(`#cycle-pick input[value="${id}"]`);
+  if (cb) cb.checked = picked;
+  const undo = document.getElementById('undo-' + id);
+  if (undo) undo.style.display = picked ? 'inline-block' : 'none';
+  const pb = document.querySelector(`#tg-list .item .actions button[data-pick="${id}"]`);
+  if (pb) pb.textContent = picked ? '✓ 已选' : '加入周期';
+}
 
 async function startCycle() {
   state.picks = state.picks || [];
@@ -299,7 +326,7 @@ async function startCycle() {
     await api('/api/cycles', { method: 'POST', body: JSON.stringify({ teachingIds: final, days: days || undefined }) });
     state.picks = [];
     toast(days ? `新背诵周期已开始（${days} 天）` : '新背诵周期已开始（长期）');
-    switchView('mine');
+    renderView();
   } catch (e) { toast(e.message); }
 }
 window.startCycle = startCycle;
