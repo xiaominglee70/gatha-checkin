@@ -164,7 +164,7 @@ async function renderHome(c) {
             <summary style="font-size:16px;font-weight:700;cursor:pointer;list-style:none">📖 ${esc(homeData.daily.title || '(今日内容)')} <span style="font-size:12px;color:#666">（点开展开）</span></summary>
             <div style="margin-top:10px;line-height:1.6;padding:10px;background:#f8f9fa;border-radius:8px">${esc(homeData.daily.content || '')}</div>
           </details>
-          <div class="src" style="margin-top:8px;font-size:12px">${homeData.daily.source ? esc(homeData.daily.source) : ''}${homeData.daily.fileName ? ' · <a href="/uploads/' + encodeURIComponent(homeData.daily.fileName) + '" target="_blank">附件</a>' : ''}</div>` : '<div class="empty">还没有偈语/开示，等管理员发布</div>'}
+          <div class="src" style="margin-top:8px;font-size:12px">${homeData.daily.source ? esc(homeData.daily.source) : ''}${homeData.daily.fileName ? ' · <a href="/uploads/' + encodeURIComponent(homeData.daily.fileName) + '" target="_blank">附件</a>' : ''}</div>` : '<div class="empty">今日无安排</div>'}
       </div>
       <div class="card" style="padding:24px">
         <h3 style="font-size:18px">今日打卡</h3>
@@ -236,17 +236,17 @@ function renderTeachingList(list, cycles) {
     const s = day(cy.startDate);
     const e = cy.endDate ? day(cy.endDate) : '';
     (cy.teachingIds || []).forEach(tid => {
-      if (!rangeById[tid]) rangeById[tid] = e ? (s + ' ~ ' + e) : (s + ' ~ 长期');
+      if (!rangeById[tid]) rangeById[tid] = e ? (s === e ? s : (s + ' ~ ' + e)) : (s + ' ~ 长期');
     });
   });
   box.innerHTML = `
     <div class="section-title">${state.tgType === '开示' ? '开示' : '偈语'}（${list.length}）</div>
     <div class="card"><div class="section-title" style="margin:0 0 6px">选择内容开始背诵周期</div>
       <div class="checkbox-list" id="cycle-pick">
-        ${list.map(t => `<label><input type="checkbox" value="${t.id}" onchange="togglePickFromCheckbox('${t.id}', this.checked)"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span><button type="button" class="btn small danger undo-btn" id="undo-${t.id}" style="${isPicked(t.id) ? '' : 'display:none'}" onclick="unpickTeaching(event, '${t.id}')">撤销</button></label>`).join('')}
+        ${list.map(t => `<label><input type="checkbox" value="${t.id}" onchange="togglePickFromCheckbox('${t.id}', this.checked)"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span><span class="pick-preview" id="preview-${t.id}" style="display:none"></span><button type="button" class="btn small danger undo-btn" id="undo-${t.id}" style="${isPicked(t.id) ? '' : 'display:none'}" onclick="unpickTeaching(event, '${t.id}')">撤销</button></label>`).join('')}
       </div>
       <div class="form-actions" style="margin-top:10px">
-        <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px">
+        <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px" oninput="updatePreview()">
         <button class="btn primary" onclick="startCycle()">开始新周期</button>
       </div>
     </div>
@@ -304,7 +304,7 @@ function unpickTeaching(ev, id) {
 }
 window.unpickTeaching = unpickTeaching;
 
-// 同步勾选框、撤销按钮、条目标题按钮三处状态
+// 同步勾选框、撤销按钮、条目标题按钮、预览四处状态
 function updatePickUI(id, picked) {
   const cb = document.querySelector(`#cycle-pick input[value="${id}"]`);
   if (cb) cb.checked = picked;
@@ -312,6 +312,30 @@ function updatePickUI(id, picked) {
   if (undo) undo.style.display = picked ? 'inline-block' : 'none';
   const pb = document.querySelector(`#tg-list .item .actions button[data-pick="${id}"]`);
   if (pb) pb.textContent = picked ? '✓ 已选' : '加入周期';
+  const pv = document.getElementById('preview-' + id);
+  if (pv) {
+    if (picked) updatePreview();
+    else { pv.style.display = 'none'; pv.textContent = ''; }
+  }
+}
+
+// 预览：根据天数显示将安排的日期（1 天=当天，多天=开始~结束，留空=长期）
+function updatePreview() {
+  const daysSel = document.getElementById('cycle-days');
+  const days = daysSel ? parseInt(daysSel.value, 10) : NaN;
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const start = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
+  let end = start;
+  if (!isNaN(days) && days > 1) {
+    const d = new Date(); d.setDate(d.getDate() + days - 1);
+    end = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  }
+  const text = (!isNaN(days) && days > 0) ? (days === 1 ? start : (start + ' ~ ' + end)) : (start + ' ~ 长期');
+  (state.picks || []).forEach(id => {
+    const el = document.getElementById('preview-' + id);
+    if (el) { el.textContent = ' 将安排：' + text; el.style.display = 'inline'; }
+  });
 }
 
 async function startCycle() {

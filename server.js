@@ -291,17 +291,9 @@ route('GET', '/api/daily', async (req, res) => {
   if (!user) return err(res, 401, '未登录');
 
   const today = todayStr();
-  let teaching = await qOne('SELECT * FROM teachings WHERE scheduled_date = $1 ORDER BY created_at DESC LIMIT 1', [today]);
-  let note = '今日安排';
-
-  if (!teaching) {
-    const past = await qOne('SELECT * FROM teachings WHERE scheduled_date <= $1 ORDER BY scheduled_date DESC LIMIT 1', [today]);
-    if (past) { teaching = past; note = '最近安排'; }
-    else {
-      const latest = await qOne('SELECT * FROM teachings ORDER BY created_at DESC LIMIT 1');
-      if (latest) { teaching = latest; note = '最新内容'; }
-    }
-  }
+  // 只显示当天安排的内容；当日无安排则不展示（不向后回退、不取最新一条）
+  const teaching = await qOne('SELECT * FROM teachings WHERE scheduled_date = $1 ORDER BY created_at DESC LIMIT 1', [today]);
+  const note = '今日安排';
 
   json(res, 200, {
     teaching: teaching ? {
