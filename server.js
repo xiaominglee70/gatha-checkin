@@ -1,200 +1,1016 @@
+'use strict';
+// ============================================================
+// 偈语背诵打卡小程序 · PostgreSQL 直连版
+// 结构：根目录/public 静态前端 + PostgreSQL 数据库（pg 直连）
+// 环境变量：DATABASE_URL（必填）、BOT_TOKEN（Telegram）
+// ============================================================
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { URL } = require('url');
+const { execFile } = require('child_process');
+const os = require('os');
 const { Pool } = require('pg');
 
-// ============ 数据库配置 ============
+// ---------------- 数据库连接 ----------------
 const DATABASE_URL = process.env.DATABASE_URL || '';
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+if (!DATABASE_URL) {
+  console.error('[DB] 未配置 DATABASE_URL 环境变量');
+  process.exit(1);
+}
+const pool = new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 
-// ============ 工具函数 ============
-function hashPassword(pwd, salt) {
-  return crypto.createHash('sha256').update(pwd + '::' + salt).digest('hex');
+// ---------------- 配置 ----------------
+const BOT_TOKEN = process.env.BOT_TOKEN || '';
+const MEMBER_LIMIT_DEFAULT = 15;
+const GOODDEED_MAX_UPDATES = 999;
+const GOODDEED_RETENTION_DAYS = 30;
+const PORT = process.env.PORT || 10000;
+
+// ---------------- 数据目录（附件上传用） ----------------
+const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// ---------------- 工具函数 ----------------
+function uid() { return crypto.randomUUID(); }
+function nowIso() { return new Date().toISOString(); }
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function hashPassword(password, salt) {
+  return crypto.createHash('sha256').update(salt + ':' + password).digest('hex');
 }
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, display_name: u.display_name, role: u.role, telegram_id: u.telegram_id, created_at: u.created_at };
+  return { id: u.id, username: u.username, role: u.role, telegramId: u.telegram_id || null, createdAt: u.created_at };
 }
 
-// ============ 认证路由 ============
-async function handleLogin(req, res, body) {
-  const username = String(body.username || '').trim();
-  if (!username || username.length > 30) return sendJson(res, 400, { error: '用户名需为 1-30 个字符' });
-  
-  console.log('[Login] 尝试登录:', username);
-  
+// ---------------- 数据库辅助函数 ----------------
+async function q(sql, params) {
+  const { rows } = await pool.query(sql, params || []);
+  return rows;
+}
+async function qOne(sql, params) {
+  const { rows } = await pool.query(sql, params || []);
+  return rows[0] || null;
+}
+async function countTable(sql, params) {
+  const { rows } = await pool.query(`SELECT COUNT(*)::int AS c FROM ${sql}`, params || []);
+  return rows[0].c;
+}
+async function insertRow(table, obj) {
+  const keys = Object.keys(obj);
+  const cols = keys.map(k => `"${k}"`).join(', ');
+  const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
+  const values = keys.map(k => obj[k]);
+  const { rows } = await pool.query(`INSERT INTO "${table}" (${cols}) VALUES (${placeholders}) RETURNING *`, values);
+  return rows[0];
+}
+async function updateRow(table, obj, whereCol, whereVal) {
+  const keys = Object.keys(obj);
+  const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
+  const values = [...keys.map(k => obj[k]), whereVal];
+  const { rows } = await pool.query(`UPDATE "${table}" SET ${sets} WHERE "${whereCol}" = $${keys.length + 1} RETURNING *`, values);
+  return rows[0];
+}
+
+// Telegram WebApp initData 签名验证
+function verifyInitData(initData, botToken) {
   try {
-    // 查询用户
-    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
-    console.log('[Login] 查询用户结果:', result.rows.length ? '找到' : '未找到');
-    
-    if (result.rows.length === 0) {
-      return sendJson(res, 404, { error: '用户不存在: ' + username });
-    }
-    
-    const user = result.rows[0];
-    
-    // 验证密码
-    if (user.password_hash) {
-      const hash = hashPassword(String(body.password || ''), user.salt);
-      console.log('[Login] 密码验证:', hash === user.password_hash ? '通过' : '失败');
-      if (hash !== user.password_hash) return sendJson(res, 401, { error: '密码错误' });
-    }
-    
-    // 创建 session
-    const token = crypto.randomBytes(32).toString('hex');
-    await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [token, user.id]);
-    console.log('[Login] 创建session: 成功');
-    
-    sendJson(res, 200, { token: token, user: publicUser(user) });
-  } catch (e) {
-    console.error('[Login] 错误:', e.message);
-    sendJson(res, 500, { error: e.message });
-  }
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const keys = Array.from(params.keys()).sort();
+    const dataCheckString = keys.map(k => `${k}=${params.get(k)}`).join('\n');
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    if (computed !== hash) return null;
+    const authDate = parseInt(params.get('auth_date') || '0', 10);
+    if (!authDate || Date.now() / 1000 - authDate > 60 * 60 * 48) return null;
+    let user = null;
+    try { user = JSON.parse(params.get('user') || 'null'); } catch (e) { user = null; }
+    return user;
+  } catch (e) { return null; }
 }
 
-async function handleTelegramLogin(req, res, body) {
-  const initData = body.initData;
-  if (!initData) return sendJson(res, 400, { error: '缺少 initData' });
-  
-  // 简单解析 Telegram initData
-  const params = new URLSearchParams(initData);
-  const telegramId = params.get('id');
-  const username = params.get('username');
-  const firstName = params.get('first_name');
-  
-  if (!telegramId) return sendJson(res, 400, { error: '无法识别 Telegram 用户' });
-  
-  try {
-    // 查询是否已有该 Telegram 用户
-    const result = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [telegramId]);
-    let user;
-    
-    if (result.rows.length > 0) {
-      user = result.rows[0];
-    } else {
-      // 新用户，自动创建
-      const salt = crypto.randomBytes(8).toString('hex');
-      const insertResult = await pool.query(
-        'INSERT INTO users (username, display_name, telegram_id, salt, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [username || 'tg_' + telegramId, firstName || username || 'Telegram 用户', telegramId, salt, 'user']
-      );
-      user = insertResult.rows[0];
-    }
-    
-    // 创建 session
-    const token = crypto.randomBytes(32).toString('hex');
-    await pool.query('INSERT INTO sessions (token, user_id) VALUES ($1, $2)', [token, user.id]);
-    
-    sendJson(res, 200, { token: token, user: publicUser(user) });
-  } catch (e) {
-    console.error('[Telegram Login] 错误:', e.message);
-    sendJson(res, 500, { error: e.message });
-  }
+// ---------------- 认证 ----------------
+async function authUser(req) {
+  const h = req.headers['authorization'] || '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  const token = m[1];
+  const session = await qOne('SELECT user_id FROM sessions WHERE token = $1 LIMIT 1', [token]);
+  if (!session) return null;
+  return await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [session.user_id]);
 }
 
-// ============ 辅助函数 ============
-function sendJson(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(data));
+function isAdmin(user) { return user && user.role === 'admin'; }
+
+// ---------------- 响应工具 ----------------
+function json(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(body);
 }
 
-function serveStatic(res, filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeTypes = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'application/javascript',
-    '.css': 'text/css',
-    '.jpg': 'image/jpeg',
-    '.png': 'image/png',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml'
-  };
-  
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404);
-      res.end('文件不存在');
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
-    res.end(data);
+function err(res, status, message) { json(res, status, { error: message }); }
+
+function safeJoin(base, target) {
+  const p = path.normalize(path.join(base, target));
+  if (!p.startsWith(path.resolve(base))) return null;
+  return p;
+}
+
+function sanitizeFileName(name) {
+  return String(name || 'file').replace(/[\\/:\*\?"<>\|\x00-\x1f]/g, '_').slice(0, 120);
+}
+
+// 附件保存：仅允许 PDF / Word，单文件 ≤ 8MB
+const ATT_EXT = ['.pdf', '.doc', '.docx'];
+const ATT_MAX_MB = 8;
+function saveAttachment(buf, name) {
+  const ext = (path.extname(String(name || '')) || '').toLowerCase();
+  if (!ATT_EXT.includes(ext)) return { error: '仅支持 PDF / Word 文档（.pdf .doc .docx）' };
+  if (!buf.length) return { error: '文件内容为空' };
+  if (buf.length > ATT_MAX_MB * 1024 * 1024) return { error: '单文件不能超过 ' + ATT_MAX_MB + 'MB' };
+  const fname = uid().slice(0, 8) + '-' + sanitizeFileName(name);
+  fs.writeFileSync(path.join(UPLOAD_DIR, fname), buf);
+  return { att: { id: uid(), fileName: fname, name: String(name), size: buf.length, addedAt: nowIso() } };
+}
+
+function readBody(req, limitMB) {
+  return new Promise((resolve, reject) => {
+    const limit = (limitMB || 30) * 1024 * 1024;
+    const chunks = [];
+    let size = 0;
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
   });
 }
 
-// ============ 服务器 ============
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${process.env.PORT || 10000}`);
-  const pathname = url.pathname;
-  
-  // 静态文件
-  if (req.method === 'GET') {
-    if (pathname === '/' || pathname === '/index.html') {
-      return serveStatic(res, path.join(__dirname, 'index.html'));
-    }
-    if (pathname === '/app.js') {
-      return serveStatic(res, path.join(__dirname, 'app.js'));
-    }
-    if (pathname === '/style.css') {
-      return serveStatic(res, path.join(__dirname, 'style.css'));
-    }
-  }
-  
-  // API 路由
-  if (pathname === '/api/auth/login' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body);
-        handleLogin(req, res, parsed);
-      } catch (e) {
-        sendJson(res, 400, { error: '无效的请求' });
-      }
+async function parseJsonBody(req) {
+  const raw = await readBody(req);
+  if (!raw.trim()) return {};
+  try { return JSON.parse(raw); } catch (e) { throw Object.assign(new Error('JSON 解析失败'), { status: 400 }); }
+}
+
+// 善叙述历史版本保留策略
+async function pruneGoodDeedVersions(gd) {
+  const settings = await qOne('SELECT gooddeed_retention_days FROM settings WHERE id = 1 LIMIT 1');
+  const days = settings?.gooddeed_retention_days || GOODDEED_RETENTION_DAYS;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  if (!Array.isArray(gd.versions)) gd.versions = [];
+  const fresh = gd.versions.filter(v => new Date(v.updated_at).getTime() >= cutoff);
+  if (fresh.length === 0 && gd.versions.length > 0) fresh.push(gd.versions[gd.versions.length - 1]);
+  gd.versions = fresh;
+  return gd;
+}
+
+// ---------------- 路由 ----------------
+const routes = [];
+function route(method, pattern, handler) {
+  const keys = [];
+  const rx = new RegExp('^' + pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\/:([a-zA-Z]+)/g, (m, k) => { keys.push(k); return '/([^/]+)'; }) + '$');
+  routes.push({ method, rx, keys, handler });
+}
+
+// ============ 认证 ============
+route('POST', '/api/auth/login', async (req, res) => {
+  const body = await parseJsonBody(req);
+  const username = String(body.username || '').trim();
+  if (!username || username.length > 30) return err(res, 400, '用户名需为 1-30 个字符');
+
+  const settings = await qOne('SELECT member_limit FROM settings WHERE id = 1 LIMIT 1');
+  const memberLimit = settings?.member_limit || MEMBER_LIMIT_DEFAULT;
+
+  let user = await qOne('SELECT * FROM users WHERE username = $1 LIMIT 1', [username]);
+
+  if (!user) {
+    const count = await countTable('users');
+    if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
+
+    const salt = crypto.randomBytes(12).toString('hex');
+    user = await insertRow('users', {
+      id: uid(),
+      username,
+      salt,
+      password_hash: body.password ? hashPassword(String(body.password), salt) : null,
+      role: count === 0 ? 'admin' : 'member',
+      telegram_id: null,
     });
-    return;
+  } else {
+    if (user.password_hash) {
+      if (!body.password || hashPassword(String(body.password), user.salt) !== user.password_hash) return err(res, 401, '密码错误');
+    }
   }
-  
-  if (pathname === '/api/auth/telegram' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body);
-        handleTelegramLogin(req, res, parsed);
-      } catch (e) {
-        sendJson(res, 400, { error: '无效的请求' });
-      }
-    });
-    return;
-  }
-  
-  if (pathname === '/api/me') {
-    sendJson(res, 200, { error: '未登录' });
-    return;
-  }
-  
-  sendJson(res, 404, { error: 'Not Found' });
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await insertRow('sessions', { token, user_id: user.id });
+
+  json(res, 200, { token, user: publicUser(user) });
 });
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, async () => {
-  console.log('==========================================');
-  console.log('  打卡小程序已启动');
-  console.log('  地址: http://localhost:' + PORT + '/');
-  
-  // 测试数据库连接
-  try {
-    await pool.query('SELECT 1');
-    console.log('  数据库连接成功');
-  } catch (e) {
-    console.log('  数据库连接失败:', e.message);
+route('POST', '/api/auth/telegram', async (req, res) => {
+  if (!BOT_TOKEN) return err(res, 500, 'BOT_TOKEN 未配置');
+  const body = await parseJsonBody(req);
+  const tgUser = verifyInitData(String(body.initData || ''), BOT_TOKEN);
+  if (!tgUser) return err(res, 401, 'Telegram 身份验证失败');
+  const tgId = String(tgUser.id);
+
+  const settings = await qOne('SELECT member_limit FROM settings WHERE id = 1 LIMIT 1');
+  const memberLimit = settings?.member_limit || MEMBER_LIMIT_DEFAULT;
+
+  let user = await qOne('SELECT * FROM users WHERE telegram_id = $1 LIMIT 1', [tgId]);
+
+  if (!user) {
+    const count = await countTable('users');
+    if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
+
+    user = await insertRow('users', {
+      id: uid(),
+      username: (tgUser.username || (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) || ('tg_' + tgId.slice(0, 8))),
+      salt: crypto.randomBytes(12).toString('hex'),
+      password_hash: null,
+      role: count === 0 ? 'admin' : 'member',
+      telegram_id: tgId,
+    });
   }
-  
-  console.log('==========================================');
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await insertRow('sessions', { token, user_id: user.id });
+
+  json(res, 200, { token, user: publicUser(user) });
+});
+
+route('POST', '/api/auth/logout', async (req, res) => {
+  const h = req.headers['authorization'] || '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (m) {
+    await pool.query('DELETE FROM sessions WHERE token = $1', [m[1]]);
+  }
+  json(res, 200, { ok: true });
+});
+
+route('GET', '/api/me', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+  const settings = await qOne('SELECT * FROM settings WHERE id = 1 LIMIT 1');
+  json(res, 200, { user: publicUser(user), settings });
+});
+
+route('PUT', '/api/me', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+  const body = await parseJsonBody(req);
+  const name = String(body.username || '').trim();
+  if (!name || name.length > 30) return err(res, 400, '昵称需为 1-30 个字符');
+
+  const dup = await qOne('SELECT id FROM users WHERE username = $1 AND id != $2 LIMIT 1', [name, user.id]);
+  if (dup) return err(res, 400, '这个昵称已被使用');
+
+  await updateRow('users', { username: name }, 'id', user.id);
+  const updated = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [user.id]);
+  json(res, 200, { user: publicUser(updated) });
+});
+
+// ============ 每日偈语 / 偈语库 ============
+route('GET', '/api/daily', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const today = todayStr();
+  let teaching = await qOne('SELECT * FROM teachings WHERE scheduled_date = $1 ORDER BY created_at DESC LIMIT 1', [today]);
+  let note = '今日安排';
+
+  if (!teaching) {
+    const past = await qOne('SELECT * FROM teachings WHERE scheduled_date <= $1 ORDER BY scheduled_date DESC LIMIT 1', [today]);
+    if (past) { teaching = past; note = '最近安排'; }
+    else {
+      const latest = await qOne('SELECT * FROM teachings ORDER BY created_at DESC LIMIT 1');
+      if (latest) { teaching = latest; note = '最新内容'; }
+    }
+  }
+
+  json(res, 200, {
+    teaching: teaching ? {
+      id: teaching.id, type: teaching.type, title: teaching.title, content: teaching.content,
+      source: teaching.source, scheduledDate: teaching.scheduled_date, fileName: teaching.file_name || null
+    } : null,
+    note
+  });
+});
+
+route('GET', '/api/teachings', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const q2 = (req.query.get('q') || '').trim().toLowerCase();
+  const type = req.query.get('type') || '';
+
+  let sql = 'SELECT * FROM teachings';
+  const conds = [];
+  const params = [];
+  if (type) { params.push(type); conds.push(`type = $${params.length}`); }
+  if (q2) { params.push(`%${q2}%`); conds.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length} OR source ILIKE $${params.length})`); }
+  if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
+  sql += ' ORDER BY created_at DESC';
+
+  const list = await q(sql, params);
+  json(res, 200, {
+    teachings: (list || []).map(x => ({
+      id: x.id, type: x.type, title: x.title, content: x.content, source: x.source,
+      scheduledDate: x.scheduled_date, fileName: x.file_name || null, updatedAt: x.updated_at
+    }))
+  });
+});
+
+route('POST', '/api/teachings', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const body = await parseJsonBody(req);
+  if (!String(body.content || '').trim()) return err(res, 400, '内容不能为空');
+
+  const rec = {
+    id: uid(),
+    type: body.type === '开示' ? '开示' : '偈语',
+    title: String(body.title || '').trim(),
+    content: String(body.content).trim(),
+    source: String(body.source || '').trim(),
+    scheduled_date: body.scheduledDate || null,
+    file_name: null,
+    created_by: user.id,
+  };
+
+  if (body.attachment && body.attachment.name && body.attachment.data) {
+    const r = saveAttachment(Buffer.from(String(body.attachment.data), 'base64'), body.attachment.name);
+    if (r.error) return err(res, 400, r.error);
+    rec.file_name = r.att.fileName;
+  }
+
+  const created = await insertRow('teachings', rec);
+  json(res, 200, { teaching: created });
+});
+
+route('PUT', '/api/teachings/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const rec = await qOne('SELECT * FROM teachings WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!rec) return err(res, 404, '内容不存在');
+
+  const body = await parseJsonBody(req);
+  const updates = { updated_at: nowIso() };
+  if (body.title !== undefined) updates.title = String(body.title).trim();
+  if (body.content !== undefined) {
+    if (!String(body.content).trim()) return err(res, 400, '内容不能为空');
+    updates.content = String(body.content).trim();
+  }
+  if (body.source !== undefined) updates.source = String(body.source).trim();
+  if (body.type !== undefined) updates.type = body.type === '开示' ? '开示' : '偈语';
+  if (body.scheduledDate !== undefined) updates.scheduled_date = body.scheduledDate || null;
+
+  await updateRow('teachings', updates, 'id', rec.id);
+  const updated = await qOne('SELECT * FROM teachings WHERE id = $1 LIMIT 1', [rec.id]);
+  json(res, 200, { teaching: updated });
+});
+
+route('DELETE', '/api/teachings/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const rec = await qOne('SELECT * FROM teachings WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!rec) return err(res, 404, '内容不存在');
+
+  if (rec.file_name) { try { fs.unlinkSync(path.join(UPLOAD_DIR, rec.file_name)); } catch (e) {} }
+  await pool.query('DELETE FROM teachings WHERE id = $1', [rec.id]);
+  json(res, 200, { ok: true });
+});
+
+// ============ 背诵周期 ============
+route('GET', '/api/cycles', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const cycles = await q('SELECT * FROM cycles WHERE user_id = $1 ORDER BY created_at DESC', [user.id]);
+
+  // 补充偈语信息
+  const result = await Promise.all((cycles || []).map(async (c) => {
+    const teachings = await Promise.all((c.teaching_ids || []).map(async (tid) => {
+      const t = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [tid]);
+      return t ? { id: t.id, title: t.title, type: t.type } : { id: tid, title: '(已删除)', type: '偈语' };
+    }));
+    return {
+      id: c.id, title: c.title, teachingIds: c.teaching_ids, status: c.status,
+      startDate: c.start_date, endDate: c.end_date, createdAt: c.created_at, teachings
+    };
+  }));
+
+  json(res, 200, { cycles: result });
+});
+
+route('POST', '/api/cycles', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const body = await parseJsonBody(req);
+  const allTeachings = await q('SELECT id FROM teachings');
+  const validIds = new Set((allTeachings || []).map(t => t.id));
+  const ids = Array.isArray(body.teachingIds) ? body.teachingIds.filter(id => validIds.has(id)) : [];
+  if (!ids.length) return err(res, 400, '请至少选择一条偈语/开示');
+
+  // 归档之前的活跃周期
+  await pool.query('UPDATE cycles SET status = $1 WHERE user_id = $2 AND status = $3', ['archived', user.id, 'active']);
+
+  let endDate = body.endDate || null;
+  if (!endDate && body.days && parseInt(body.days) > 0) {
+    const d = new Date(); d.setDate(d.getDate() + parseInt(body.days) - 1);
+    const p = n => String(n).padStart(2, '0');
+    endDate = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  }
+
+  // 把选的第一个内容的日期设成今天
+  await pool.query('UPDATE teachings SET scheduled_date = $1 WHERE id = $2', [todayStr(), ids[0]]);
+
+  const cycle = {
+    id: uid(), user_id: user.id, title: body.title || ('周期 ' + todayStr()),
+    teaching_ids: ids, status: 'active', start_date: todayStr(), end_date: endDate,
+  };
+  const created = await insertRow('cycles', cycle);
+  json(res, 200, { cycle: created });
+});
+
+// ============ 打卡 ============
+route('POST', '/api/checkins', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const body = await parseJsonBody(req);
+  const today = todayStr();
+  const rec = {
+    id: uid(), user_id: user.id, date: today,
+    note: String(body.note || '').trim().slice(0, 500),
+  };
+  await insertRow('checkins', rec);
+
+  const count = await countTable('checkins WHERE user_id = $1 AND date = $2', [user.id, today]);
+  json(res, 200, { checkin: rec, todayCount: count || 0 });
+});
+
+route('GET', '/api/checkins/today', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const today = todayStr();
+  const allUsers = await q('SELECT * FROM users ORDER BY username ASC');
+  const todayCheckins = await q('SELECT * FROM checkins WHERE date = $1', [today]);
+
+  const roster = (allUsers || []).map(u => {
+    const mine = (todayCheckins || []).filter(c => c.user_id === u.id);
+    return {
+      user: publicUser(u),
+      done: mine.length > 0,
+      count: mine.length,
+      lastNote: mine.length ? mine[mine.length - 1].note : null,
+      lastAt: mine.length ? mine[mine.length - 1].created_at : null,
+    };
+  });
+
+  json(res, 200, { date: today, roster });
+});
+
+route('GET', '/api/checkins/mine', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const list = await q('SELECT * FROM checkins WHERE user_id = $1 ORDER BY created_at DESC', [user.id]);
+  json(res, 200, { checkins: list || [] });
+});
+
+// ============ 善叙述 ============
+route('GET', '/api/gooddeeds', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const list = await q('SELECT * FROM gooddeeds ORDER BY updated_at DESC');
+
+  const result = await Promise.all((list || []).map(async (gd) => {
+    await pruneGoodDeedVersions(gd);
+    const author = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [gd.user_id]);
+    let teaching = null;
+    if (gd.teaching_id) {
+      const t = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [gd.teaching_id]);
+      teaching = t;
+    }
+    const feedbackCount = await countTable('feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+
+    return {
+      id: gd.id,
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
+      attachments: gd.attachments || [],
+      teachingId: gd.teaching_id || null,
+      teaching: teaching ? { id: teaching.id, title: teaching.title, type: teaching.type } : null,
+      versionCount: gd.versions.length,
+      updatedAt: gd.updated_at, createdAt: gd.created_at,
+      feedbackCount: feedbackCount || 0,
+    };
+  }));
+
+  json(res, 200, { gooddeeds: result });
+});
+
+route('GET', '/api/gooddeeds/mine', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const list = await q('SELECT * FROM gooddeeds WHERE user_id = $1 ORDER BY updated_at DESC', [user.id]);
+
+  const settings = await qOne('SELECT gooddeed_max_updates FROM settings WHERE id = 1 LIMIT 1');
+  const maxUpdates = settings?.gooddeed_max_updates || GOODDEED_MAX_UPDATES;
+
+  const result = await Promise.all((list || []).map(async (gd) => {
+    await pruneGoodDeedVersions(gd);
+    let teaching = null;
+    if (gd.teaching_id) {
+      const t = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [gd.teaching_id]);
+      teaching = t;
+    }
+    return {
+      id: gd.id, title: gd.title || '',
+      content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
+      attachments: gd.attachments || [],
+      teachingId: gd.teaching_id || null,
+      teaching: teaching ? { id: teaching.id, title: teaching.title, type: teaching.type } : null,
+      versions: gd.versions, versionCount: gd.versions.length,
+      updateLeft: Math.max(0, maxUpdates - (gd.versions.length - 1)),
+      updatedAt: gd.updated_at, createdAt: gd.created_at,
+    };
+  }));
+
+  json(res, 200, { gooddeeds: result });
+});
+
+route('POST', '/api/gooddeeds', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const body = await parseJsonBody(req);
+  const content = String(body.content || '').trim();
+  if (!content) return err(res, 400, '善叙述内容不能为空');
+
+  const today = todayStr();
+  const todayCheckin = await qOne('SELECT id FROM checkins WHERE user_id = $1 AND date = $2 ORDER BY created_at DESC LIMIT 1', [user.id, today]);
+
+  const attachments = [];
+  if (Array.isArray(body.attachments)) {
+    for (const att of body.attachments) {
+      if (!att || !att.name) continue;
+      const r = saveAttachment(Buffer.from(String(att.data || ''), 'base64'), att.name);
+      if (r.error) return err(res, 400, r.error);
+      attachments.push(r.att);
+    }
+  }
+
+  const rec = {
+    id: uid(), user_id: user.id, title: String(body.title || '').trim(),
+    checkin_id: body.checkinId || (todayCheckin?.id || null),
+    teaching_id: body.teachingId || null,
+    versions: [{ content, updated_at: nowIso() }],
+    attachments,
+  };
+  const created = await insertRow('gooddeeds', rec);
+  json(res, 200, { gooddeed: { id: created.id, attachments: created.attachments } });
+});
+
+route('PUT', '/api/gooddeeds/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+  if (gd.user_id !== user.id) return err(res, 403, '只能更新自己的善叙述');
+
+  const body = await parseJsonBody(req);
+  const content = String(body.content || '').trim();
+  if (!content) return err(res, 400, '内容不能为空');
+
+  const updates = {
+    content,
+    versions: [{ content, updated_at: nowIso() }],
+    updated_at: nowIso(),
+  };
+  await updateRow('gooddeeds', updates, 'id', gd.id);
+  json(res, 200, { gooddeed: { id: gd.id, versions: updates.versions, versionCount: 1 } });
+});
+
+route('GET', '/api/gooddeeds/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+
+  await pruneGoodDeedVersions(gd);
+  const author = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [gd.user_id]);
+  const feedbackList = await q(
+    'SELECT f.*, u.username AS author_username FROM feedback f LEFT JOIN users u ON u.id = f.user_id WHERE f.target_type = $1 AND f.target_id = $2 ORDER BY f.created_at DESC',
+    ['gooddeed', gd.id]
+  );
+
+  json(res, 200, {
+    gooddeed: {
+      id: gd.id,
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      attachments: gd.attachments || [],
+      versions: gd.versions,
+      content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
+      updatedAt: gd.updated_at, createdAt: gd.created_at,
+    },
+    feedback: (feedbackList || []).map(f => ({
+      id: f.id, content: f.content, createdAt: f.created_at,
+      author: f.author_username || '(已移除)'
+    }))
+  });
+});
+
+// 善叙述附件：追加
+route('POST', '/api/gooddeeds/:id/attachments', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+  if (gd.user_id !== user.id) return err(res, 403, '只能给自己的善叙述添加附件');
+
+  const body = await parseJsonBody(req);
+  if (!body.name || !body.data) return err(res, 400, '缺少文件');
+
+  const r = saveAttachment(Buffer.from(String(body.data), 'base64'), body.name);
+  if (r.error) return err(res, 400, r.error);
+
+  const attachments = [...(gd.attachments || []), r.att];
+  await updateRow('gooddeeds', { attachments }, 'id', gd.id);
+  json(res, 200, { attachments });
+});
+
+// 善叙述附件：删除
+route('DELETE', '/api/gooddeeds/:id/attachments/:attId', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+  if (gd.user_id !== user.id) return err(res, 403, '只能删除自己善叙述的附件');
+
+  const att = (gd.attachments || []).find(a => a.id === req.params.attId);
+  if (!att) return err(res, 404, '附件不存在');
+
+  const attachments = (gd.attachments || []).filter(a => a.id !== req.params.attId);
+  await updateRow('gooddeeds', { attachments }, 'id', gd.id);
+  try { fs.unlinkSync(path.join(UPLOAD_DIR, att.fileName)); } catch (e) {}
+  json(res, 200, { ok: true });
+});
+
+// 删除整条善叙述
+route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+  if (gd.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能删除自己的善叙述');
+
+  (gd.attachments || []).forEach(a => { try { fs.unlinkSync(path.join(UPLOAD_DIR, a.fileName)); } catch (e) {} });
+  await pool.query('DELETE FROM feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+  await pool.query('DELETE FROM gooddeeds WHERE id = $1', [gd.id]);
+  json(res, 200, { ok: true });
+});
+
+// ============ 反馈 ============
+route('POST', '/api/feedback', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const body = await parseJsonBody(req);
+  const type = String(body.targetType || '');
+  const targetId = String(body.targetId || '');
+  if (!['teaching', 'checkin', 'gooddeed'].includes(type)) return err(res, 400, 'targetType 无效');
+  const content = String(body.content || '').trim();
+  if (!content) return err(res, 400, '反馈内容不能为空');
+
+  const rec = {
+    id: uid(), user_id: user.id, target_type: type, target_id: targetId,
+    content: content.slice(0, 1000),
+  };
+  const created = await insertRow('feedback', rec);
+  json(res, 200, { feedback: created });
+});
+
+route('GET', '/api/feedback', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const type = req.query.get('targetType') || '';
+  const targetId = req.query.get('targetId') || '';
+
+  let sql = 'SELECT f.*, u.username AS author_username FROM feedback f LEFT JOIN users u ON u.id = f.user_id';
+  const conds = [];
+  const params = [];
+  if (type) { params.push(type); conds.push(`f.target_type = $${params.length}`); }
+  if (targetId) { params.push(targetId); conds.push(`f.target_id = $${params.length}`); }
+  if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
+  sql += ' ORDER BY f.created_at DESC';
+
+  const list = await q(sql, params);
+  json(res, 200, {
+    feedback: (list || []).map(f => ({
+      id: f.id, targetType: f.target_type, targetId: f.target_id,
+      content: f.content, createdAt: f.created_at,
+      author: f.author_username || '(已移除)'
+    }))
+  });
+});
+
+route('PUT', '/api/feedback/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const f = await qOne('SELECT * FROM feedback WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!f) return err(res, 404, '反馈不存在');
+  if (f.user_id !== user.id) return err(res, 403, '只能编辑自己的反馈');
+
+  const body = await parseJsonBody(req);
+  const content = String(body.content || '').trim();
+  if (!content) return err(res, 400, '内容不能为空');
+
+  await updateRow('feedback', { content, updated_at: nowIso() }, 'id', f.id);
+  json(res, 200, { feedback: { ...f, content } });
+});
+
+route('DELETE', '/api/feedback/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const f = await qOne('SELECT * FROM feedback WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!f) return err(res, 404, '反馈不存在');
+  if (f.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能删除自己的反馈');
+
+  await pool.query('DELETE FROM feedback WHERE id = $1', [f.id]);
+  json(res, 200, { ok: true });
+});
+
+// ============ 文档文本提取 ============
+function extractDocxText(base64Data, originalName) {
+  return new Promise((resolve, reject) => {
+    const ext = (path.extname(String(originalName || '')) || '').toLowerCase();
+    if (ext === '.pdf') return resolve({ text: null, note: 'PDF 暂不支持自动提取，请手动复制内容到文本框' });
+    if (ext === '.doc') return resolve({ text: null, note: '旧版 .doc 暂不支持，请另存为 .docx 后上传' });
+    if (ext !== '.docx') return resolve({ text: null, note: '仅 .docx 支持自动提取文字' });
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatha-extract-'));
+    const tmpZip = path.join(tmpDir, 'input.zip');
+    fs.writeFileSync(tmpZip, Buffer.from(String(base64Data || ''), 'base64'));
+
+    const isWin = process.platform === 'win32';
+    const expandDir = path.join(tmpDir, 'unzipped');
+    const expandCmd = isWin
+      ? ['powershell', '-NoProfile', '-Command', `Expand-Archive -LiteralPath '${tmpZip}' -DestinationPath '${expandDir}' -Force`]
+      : ['unzip', '-o', tmpZip, '-d', expandDir];
+
+    execFile(expandCmd[0], expandCmd.slice(1), { timeout: 15000 }, (err) => {
+      if (err) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return reject(new Error('解压文档失败，请确认是有效的 .docx 文件')); }
+      try {
+        const xmlPath = path.join(expandDir, 'word', 'document.xml');
+        if (!fs.existsSync(xmlPath)) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {} return resolve({ text: null, note: '未在文档中找到文本内容' }); }
+        const xml = fs.readFileSync(xmlPath, 'utf8');
+        const paragraphs = xml.split(/<w:p[ >]/).slice(1);
+        const lines = paragraphs.map(p => {
+          const texts = p.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
+          return texts.map(t => t.replace(/<w:t[^>]*>/, '').replace(/<\/w:t>/, '')).join('');
+        }).filter(line => line.trim().length > 0);
+        const text = lines.join('\n').trim();
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+        if (!text) return resolve({ text: null, note: '文档中未提取到文字（可能是图片型文档）' });
+        resolve({ text });
+      } catch (e) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e2) {} reject(new Error('读取文档内容失败')); }
+    });
+  });
+}
+
+route('POST', '/api/admin/extract-doc', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  const body = await parseJsonBody(req);
+  if (!body.name || !body.data) return err(res, 400, '缺少文件');
+  try {
+    const r = await extractDocxText(body.data, body.name);
+    json(res, 200, r);
+  } catch (e) { err(res, 400, e.message); }
+});
+
+// ============ 管理 ============
+route('GET', '/api/admin/users', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const today = todayStr();
+  const allUsers = await q('SELECT * FROM users ORDER BY username ASC');
+  const todayCheckins = await q('SELECT user_id FROM checkins WHERE date = $1', [today]);
+  const checkedInUserIds = new Set((todayCheckins || []).map(c => c.user_id));
+  const settings = await qOne('SELECT member_limit FROM settings WHERE id = 1 LIMIT 1');
+
+  json(res, 200, {
+    memberLimit: settings?.member_limit || MEMBER_LIMIT_DEFAULT,
+    users: (allUsers || []).map(u => ({
+      ...publicUser(u),
+      todayDone: checkedInUserIds.has(u.id),
+      isSelf: u.id === user.id,
+    }))
+  });
+});
+
+route('PUT', '/api/admin/users/:id/role', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const target = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!target) return err(res, 404, '用户不存在');
+
+  const body = await parseJsonBody(req);
+  const role = body.role === 'admin' ? 'admin' : 'member';
+
+  if (role !== 'admin' && target.role === 'admin') {
+    const count = await countTable('users WHERE role = $1', ['admin']);
+    if (count <= 1) return err(res, 400, '至少保留一名管理员');
+  }
+
+  await updateRow('users', { role }, 'id', target.id);
+  json(res, 200, { user: publicUser({ ...target, role }) });
+});
+
+route('DELETE', '/api/admin/users/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+  if (req.params.id === user.id) return err(res, 400, '不能移除自己');
+
+  const target = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!target) return err(res, 404, '用户不存在');
+
+  if (target.role === 'admin') {
+    const count = await countTable('users WHERE role = $1', ['admin']);
+    if (count <= 1) return err(res, 400, '至少保留一名管理员');
+  }
+
+  await pool.query('DELETE FROM checkins WHERE user_id = $1', [target.id]);
+  await pool.query('DELETE FROM gooddeeds WHERE user_id = $1', [target.id]);
+  await pool.query('DELETE FROM cycles WHERE user_id = $1', [target.id]);
+  await pool.query('DELETE FROM feedback WHERE user_id = $1', [target.id]);
+  await pool.query('DELETE FROM sessions WHERE user_id = $1', [target.id]);
+  await pool.query('DELETE FROM users WHERE id = $1', [target.id]);
+
+  json(res, 200, { ok: true });
+});
+
+route('PUT', '/api/admin/settings', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const body = await parseJsonBody(req);
+  const limit = parseInt(body.memberLimit, 10);
+  if (!(limit >= 1 && limit <= 500)) return err(res, 400, '人数上限需为 1-500');
+
+  await updateRow('settings', { member_limit: limit }, 'id', 1);
+  const settings = await qOne('SELECT * FROM settings WHERE id = 1 LIMIT 1');
+  json(res, 200, { settings });
+});
+
+route('GET', '/api/admin/checkins', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  const list = await q('SELECT c.*, u.username AS author_username FROM checkins c LEFT JOIN users u ON u.id = c.user_id ORDER BY c.created_at DESC');
+  json(res, 200, {
+    checkins: (list || []).map(c => ({ ...c, username: c.author_username || '(已移除)' }))
+  });
+});
+
+route('DELETE', '/api/admin/checkins/:id', async (req, res) => {
+  const user = await authUser(req);
+  if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
+
+  await pool.query('DELETE FROM checkins WHERE id = $1', [req.params.id]);
+  json(res, 200, { ok: true });
+});
+
+// ---------------- 静态文件 ----------------
+const MIME = {
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.txt': 'text/plain; charset=utf-8', '.json': 'application/json; charset=utf-8'
+};
+
+// 查找静态文件：优先根目录，其次 public/ 子目录
+function findStatic(name) {
+  const rootFile = path.join(__dirname, name);
+  if (fs.existsSync(rootFile) && fs.statSync(rootFile).isFile()) return rootFile;
+  const pubFile = path.join(__dirname, 'public', name);
+  if (fs.existsSync(pubFile) && fs.statSync(pubFile).isFile()) return pubFile;
+  return null;
+}
+
+function serveFile(res, absPath) {
+  if (!absPath || !fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return err(res, 404, '文件不存在');
+  const ext = path.extname(absPath).toLowerCase();
+  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  fs.createReadStream(absPath).pipe(res);
+}
+
+// ---------------- 服务器 ----------------
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    const pathname = decodeURIComponent(url.pathname);
+
+    if (req.method === 'GET') {
+      if (pathname === '/' || pathname === '/index.html') return serveFile(res, findStatic('index.html'));
+      if (pathname.startsWith('/static/')) {
+        const p = findStatic(pathname.slice('/static/'.length));
+        return serveFile(res, p);
+      }
+      if (pathname.startsWith('/uploads/')) {
+        const p = safeJoin(UPLOAD_DIR, pathname.slice('/uploads/'.length));
+        return serveFile(res, p);
+      }
+    }
+
+    req.query = url.searchParams;
+    req.params = {};
+    for (const r of routes) {
+      if (r.method !== req.method) continue;
+      const m = pathname.match(r.rx);
+      if (!m) continue;
+      r.keys.forEach((k, i) => { req.params[k] = decodeURIComponent(m[i + 1]); });
+      await r.handler(req, res);
+      return;
+    }
+
+    json(res, 404, { error: 'Not found' });
+  } catch (e) {
+    const status = e.status || 500;
+    console.error('[Server] 错误:', e.message);
+    json(res, status, { error: e.message || '服务器错误' });
+  }
+});
+
+// ---------------- 首次启动种子数据 ----------------
+async function seed() {
+  try {
+    const userCount = await countTable('users');
+    if (userCount === 0) {
+      const salt = crypto.randomBytes(12).toString('hex');
+      await insertRow('users', {
+        id: uid(), username: 'admin', salt,
+        password_hash: hashPassword('admin123', salt), role: 'admin', telegram_id: null,
+      });
+      console.log('[Seed] 已创建管理员账号: admin / admin123');
+    }
+
+    const teachingCount = await countTable('teachings');
+    if (teachingCount === 0) {
+      await pool.query(
+        'INSERT INTO teachings (id, type, title, content, source) VALUES ($1,$2,$3,$4,$5), ($6,$7,$8,$9,$10)',
+        [uid(), '偈语', '七佛通诫偈', '诸恶莫作，众善奉行；自净其意，是诸佛教。', '《增一阿含经》',
+         uid(), '开示', '心念如镜', '心念如镜，尘来尘去，镜体不动；观照而不随转，即是修行。', '示例开示（可删除）']
+      );
+      console.log('[Seed] 已插入示例偈语');
+    }
+  } catch (e) {
+    console.error('[Seed] 初始化失败:', e.message);
+  }
+}
+
+seed().then(() => {
+  server.listen(PORT, async () => {
+    console.log('==========================================');
+    console.log('  偈语背诵打卡 · PostgreSQL 直连版已启动');
+    console.log(`  地址: http://localhost:${PORT}`);
+    console.log(`  管理员: admin / admin123（首次启动自动创建）`);
+    console.log('==========================================');
+    try {
+      await pool.query('SELECT 1');
+      console.log('[DB] 数据库连接正常');
+    } catch (e) {
+      console.error('[DB] 数据库连接失败:', e.message);
+    }
+  });
 });
