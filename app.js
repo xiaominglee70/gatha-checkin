@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 // ============================================================
 // 偈语背诵打卡 · 前端逻辑（单页应用）
 // 双通道：Telegram 内打开 → initData 自动识别；浏览器打开 → 用户名登录
@@ -244,6 +244,7 @@ function renderTeachingList(list) {
         <div class="actions">
           <button class="btn small ghost" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
           <button class="btn small primary" onclick="writeGooddeedFromTeaching('${t.id}','${esc(t.title || '(无标题)').replace(/'/g, "\\'")}','${esc(t.type)}')">写善叙述</button>
+          <button class="btn small ghost" onclick="downloadTeaching('${t.id}')">下载</button>
           ${state.user && state.user.role === 'admin' ? `
             <button class="btn small ghost" onclick="editTeachingById('${t.id}')">修改</button>
             <button class="btn small danger" onclick="delTeaching('${t.id}')">删除</button>` : ''}
@@ -348,23 +349,25 @@ async function renderGooddeeds(c) {
   const myNewest = mine.gooddeeds.length ? mine.gooddeeds[0] : null;
   c.innerHTML = `
     <div class="card gd-box">
-      <h3>我的善叙述 ${myNewest ? '<span style="font-size:12px;color:#888;font-weight:normal">（' + fmtTime(myNewest.updatedAt) + '）</span>' : ''}</h3>
+      <h3>我的善叙述（${mine.gooddeeds.length} 条）</h3>
       ${state.pendingTeachingId ? `
         <div style="background:#e8f0f8;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:14px;color:#1f4a6a">
           正在为 <b>${esc(state.pendingTeachingType)}《${esc(state.pendingTeachingTitle)}》</b> 写善叙述
           <button class="btn small ghost" style="margin-left:8px" onclick="cancelPendingTeaching()">取消关联</button>
         </div>` : ''}
-      ${myNewest ? `
-        <div style="font-size:16px;font-weight:700;margin-bottom:6px">${myNewest.title ? '《' + esc(myNewest.title) + '》' : ''}</div>
-        <div style="margin-bottom:8px">${retentionHint(myNewest)}</div>
-        <div class="body" style="margin-bottom:8px">${esc(myNewest.content)}</div>
-        ${renderAtts(myNewest.attachments, true, myNewest.id)}
-        <div class="form-actions" style="margin-top:10px">
-          <button class="btn small ghost" onclick="openEditGooddeed('${myNewest.id}','${esc(myNewest.content)}',${myNewest.updateLeft})">编辑</button>
-          <button class="btn small danger" onclick="delGooddeed('${myNewest.id}')">删除</button>
-          <button class="btn small ghost" onclick="showGooddeedDetail('${myNewest.id}')">查看反馈</button>
-          <button class="btn small ghost" onclick="downloadGooddeed('${myNewest.id}', '${esc(myNewest.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}', '${esc(state.user.username)}')">下载到本地</button>
-        </div>` : '<div class="small">今天还没写善叙述</div>'}
+      ${mine.gooddeeds.length ? mine.gooddeeds.map((g, i) => `
+        <div class="item gd-box" style="border-top:1px solid #e5edf5;padding-top:10px">
+          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : ''}</span><span class="meta">${fmtTime(g.updatedAt)} · ${g.versionCount} 版</span></div>
+          <div style="margin-bottom:6px">${retentionHint(g)}</div>
+          <div class="body" style="margin-bottom:6px">${esc(g.content)}</div>
+          ${renderAtts(g.attachments, true, g.id)}
+          <div class="actions">
+            <button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}',${g.updateLeft})">编辑</button>
+            <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
+            <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
+            <button class="btn small ghost" onclick="downloadGooddeed('${g.id}', '${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}', '${esc(state.user.username)}')">下载到本地</button>
+          </div>
+        </div>`).join('') : '<div class="small">今天还没写善叙述</div>'}
       <div class="field" style="margin-top:12px"><label>题目</label><input id="gd-title" type="text" placeholder="给你的善叙述起个题目…"></div>
       <div class="field"><label>字数不限</label><textarea id="gd-new" placeholder=""></textarea></div>
       <div class="field"><label>文档附件（PDF / Word，可选，单文件 ≤ 8MB）</label><input id="gd-files" type="file" accept=".pdf,.doc,.docx" multiple></div>
@@ -443,6 +446,26 @@ function downloadGooddeed(id, content, username) {
   toast('已下载到本地');
 }
 window.downloadGooddeed = downloadGooddeed;
+// 下载偈语/开示内容到本地
+async function downloadTeaching(id) {
+  const d = await api('/api/teachings');
+  const t = d.teachings.find(x => x.id === id);
+  if (!t) { toast('内容不存在'); return; }
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const dateStr = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
+  const header = `${t.type} · ${t.title || '(无标题)'}\n${t.source ? '来源：' + t.source + '\n' : ''}${'='.repeat(40)}\n\n`;
+  const blob = new Blob([header + t.content], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${t.type}_${t.title || '内容'}_${dateStr}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  toast('已下载到本地');
+}
+window.downloadTeaching = downloadTeaching;
 
 async function openEditGooddeed(id, content, left) {
   const detail = await api('/api/gooddeeds/' + id);
@@ -556,7 +579,36 @@ window.showGooddeedDetail = showGooddeedDetail;
 // ================= 我的 =================
 async function renderMine(c) {
   c.innerHTML = '<div class="empty">加载中…</div>';
-  const [cycles, checkins] = await Promise.all([api('/api/cycles'), api('/api/checkins/mine')]);
+  const [checkins, mine, teachings, cycles] = await Promise.all([
+    api('/api/checkins/mine'),
+    api('/api/gooddeeds/mine'),
+    api('/api/teachings'),
+    api('/api/cycles')
+  ]);
+  // 按日期统计打卡次数
+  const byDate = {};
+  (checkins.checkins || []).forEach(ck => { byDate[ck.date] = (byDate[ck.date] || 0) + 1; });
+  // 题目索引：安排日期 -> 偈语/开示题目
+  const titleByDate = {};
+  (teachings.teachings || []).forEach(t => {
+    if (t.scheduledDate && !titleByDate[t.scheduledDate]) titleByDate[t.scheduledDate] = t.title || '(无标题)';
+  });
+  // 周期题目：当天处于某个进行中周期内时，延续显示该周期安排的题目
+  const dayKey = d => String(d).slice(0, 10);
+  const activeCycles = (cycles.cycles || []).filter(cy => cy.status === 'active');
+  function cycleTitle(d) {
+    for (const cy of activeCycles) {
+      const s = dayKey(cy.startDate);
+      const e = cy.endDate ? dayKey(cy.endDate) : null;
+      if (d >= s && (!e || d <= e)) {
+        const t = (cy.teachings || []).find(x => x && x.title);
+        if (t) return t.title;
+      }
+    }
+    return '';
+  }
+  const dates = Object.keys(byDate).sort().reverse();
+  const gdList = mine.gooddeeds || [];
   c.innerHTML = `
     <div class="card">
       <h3>我的账号</h3>
@@ -567,22 +619,19 @@ async function renderMine(c) {
       </div>
     </div>
     <div class="card">
-      <h3>背诵周期</h3>
-      ${cycles.cycles.length ? cycles.cycles.map(cy => `
-        <div class="item">
-          <div class="head"><span class="title">${esc(cy.title)}</span><span class="meta">${cy.status === 'active' ? '进行中' : '已归档'} · 开始 ${fmtDate(cy.startDate)}${cy.endDate ? ' · 至 ' + fmtDate(cy.endDate) : ''}</span></div>
-          <div class="meta">包含：${cy.teachings.map(t => `${esc(t.type)}${t.title ? '《' + esc(t.title) + '》' : ''}`).join('、')}</div>
-        </div>`).join('') : '<div class="empty">还没有背诵周期，去偈语库选择内容开始吧</div>'}
-      <div class="form-actions" style="margin-top:8px"><button class="btn primary" onclick="switchView('teachings')">选择内容 · 开始新周期</button></div>
-    </div>
-    <div class="card">
-      <h3>我的打卡记录（${checkins.checkins.length} 条）</h3>
-      ${checkins.checkins.length ? checkins.checkins.map(ck => `
+      <h3>打卡记录（${dates.length} 天）</h3>
+      ${dates.length ? dates.map(d => `
         <div class="roster-row">
           <span class="dot done"></span>
-          <span class="roster-name">${fmtDate(ck.date)} ${ck.note ? '· ' + esc(ck.note) : ''}</span>
-          <span class="muted">${fmtTime(ck.createdAt)}</span>
+          <span class="roster-name">${fmtDate(d)} · ${esc(titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${byDate[d]} 次</span>
         </div>`).join('') : '<div class="empty">还没有打卡记录</div>'}
+    </div>
+    <div class="card">
+      <h3>善叙述（${gdList.length} 条）</h3>
+      ${gdList.length ? gdList.map((g, i) => `
+        <div class="item">
+          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : '（未命名）'}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
+        </div>`).join('') : '<div class="empty">还没有善叙述</div>'}
     </div>`;
 }
 
