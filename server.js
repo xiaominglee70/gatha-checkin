@@ -60,18 +60,22 @@ async function countTable(sql, params) {
   const { rows } = await pool.query(`SELECT COUNT(*)::int AS c FROM ${sql}`, params || []);
   return rows[0].c;
 }
+function prepVal(v) {
+  if (v !== null && typeof v === 'object') return JSON.stringify(v);
+  return v;
+}
 async function insertRow(table, obj) {
   const keys = Object.keys(obj);
   const cols = keys.map(k => `"${k}"`).join(', ');
   const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ');
-  const values = keys.map(k => obj[k]);
+  const values = keys.map(k => prepVal(obj[k]));
   const { rows } = await pool.query(`INSERT INTO "${table}" (${cols}) VALUES (${placeholders}) RETURNING *`, values);
   return rows[0];
 }
 async function updateRow(table, obj, whereCol, whereVal) {
   const keys = Object.keys(obj);
   const sets = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
-  const values = [...keys.map(k => obj[k]), whereVal];
+  const values = [...keys.map(k => prepVal(obj[k])), whereVal];
   const { rows } = await pool.query(`UPDATE "${table}" SET ${sets} WHERE "${whereCol}" = $${keys.length + 1} RETURNING *`, values);
   return rows[0];
 }
