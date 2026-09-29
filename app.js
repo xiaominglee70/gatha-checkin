@@ -162,7 +162,7 @@ async function renderHome(c) {
         ${homeData.daily ? `
           <details style="margin-top:4px">
             <summary style="font-size:16px;font-weight:700;cursor:pointer;list-style:none">📖 ${esc(homeData.daily.title || '(今日内容)')} <span style="font-size:12px;color:#666">（点开展开）</span></summary>
-            <div style="margin-top:10px;line-height:1.6;padding:10px;background:#f8f9fa;border-radius:8px;white-space:pre-wrap">${esc(homeData.daily.content || '')}</div>
+            <div style="margin-top:10px;line-height:1.6;padding:10px;background:#f8f9fa;border-radius:8px;white-space:pre-wrap">${esc(homeData.daily.content || '').replace(/\n/g, '<br>')}</div>
           </details>
           <div class="src" style="margin-top:8px;font-size:12px">${homeData.daily.source ? esc(homeData.daily.source) : ''}${homeData.daily.fileName ? ' · <a href="/uploads/' + encodeURIComponent(homeData.daily.fileName) + '" target="_blank">附件</a>' : ''}</div>` : '<div class="empty">今日无安排</div>'}
       </div>
