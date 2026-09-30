@@ -473,8 +473,9 @@ async function renderGooddeeds(c) {
       <div class="body">${esc(g.content)}</div>
       ${renderAtts(g.attachments, false, g.id)}
       <div class="actions">
-        <button class="btn small danger" onclick="delGooddeed('${myNewest.id}')">删除</button>
-          <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈（${g.feedbackCount}）</button>
+        ${g.author.id === state.user.id ? `<button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button>` : ''}
+        ${(g.author.id === state.user.id || state.user.role === 'admin') ? `<button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>` : ''}
+        <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈（${g.feedbackCount}）</button>
       </div>
       <div class="field" style="margin-top:8px"><textarea id="fb-gooddeed-${g.id}" placeholder="写下你的反馈或建议（字数不限）…" style="min-height:80px"></textarea></div>
       <div class="form-actions"><button class="btn small primary" onclick="submitFeedback('gooddeed','${g.id}')">提交反馈</button></div>
@@ -551,23 +552,26 @@ async function downloadTeaching(id) {
 }
 window.downloadTeaching = downloadTeaching;
 
-async function openEditGooddeed(id, content, left) {
+async function openEditGooddeed(id, content) {
   const detail = await api('/api/gooddeeds/' + id);
   const atts = detail.gooddeed.attachments || [];
-  const area = document.createElement('div');
-  area.className = 'card gd-box gd-edit-area';
-  area.innerHTML = `
-    <h3>编辑善叙述</h3>
-    <div class="field"><textarea id="gd-edit">${esc(content)}</textarea></div>
-    ${renderAtts(atts, true, id)}
-    <div class="field"><label>添加文档附件（PDF / Word，可选）</label><input id="gd-add-file-${id}" type="file" accept=".pdf,.doc,.docx" multiple></div>
-    <div class="form-actions">
-      <button class="btn primary small" onclick="saveEditGooddeed('${id}')">保存</button>
-      <button class="btn ghost small" onclick="this.closest('.card').remove()">取消</button>
-      <button class="btn small ghost" onclick="uploadGooddeedAtt('${id}')">上传附件</button>
+  const layer = document.createElement('div');
+  layer.id = 'gd-edit-layer';
+  layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
+    <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51;background:#fff;border-radius:12px;padding:16px">
+      <h3 style="margin-top:0">编辑善叙述</h3>
+      <div class="field"><textarea id="gd-edit" style="min-height:120px">${esc(content)}</textarea></div>
+      ${renderAtts(atts, true, id)}
+      <div class="field"><label>添加文档附件（PDF / Word，可选）</label><input id="gd-add-file-${id}" type="file" accept=".pdf,.doc,.docx" multiple></div>
+      <div class="form-actions">
+        <button class="btn primary small" onclick="saveEditGooddeed('${id}')">保存</button>
+        <button class="btn ghost small" onclick="this.closest('#gd-edit-layer').remove()">取消</button>
+        <button class="btn small ghost" onclick="uploadGooddeedAtt('${id}')">上传附件</button>
+      </div>
     </div>`;
-  document.querySelector('.gd-box').insertAdjacentElement('afterend', area);
-  document.getElementById('gd-edit').focus();
+  document.body.appendChild(layer);
+  const ta = document.getElementById('gd-edit');
+  if (ta) ta.focus();
 }
 window.openEditGooddeed = openEditGooddeed;
 
@@ -579,6 +583,8 @@ async function uploadGooddeedAtt(id) {
       await api('/api/gooddeeds/' + id + '/attachments', { method: 'POST', body: JSON.stringify({ name: f.name, data: await readFileBase64(f) }) });
     }
     toast('附件已上传（不占用更新次数）');
+    const el = document.getElementById('gd-edit-layer');
+    if (el) el.remove();
     renderView();
   } catch (e) { toast(e.message); }
 }
@@ -586,7 +592,7 @@ window.uploadGooddeedAtt = uploadGooddeedAtt;
 
 async function delGooddeedAtt(id, attId) {
   if (!confirm('删除该附件？')) return;
-  try { await api('/api/gooddeeds/' + id + '/attachments/' + attId, { method: 'DELETE' }); toast('已删除'); renderView(); }
+  try { await api('/api/gooddeeds/' + id + '/attachments/' + attId, { method: 'DELETE' }); toast('已删除'); const el = document.getElementById('gd-edit-layer'); if (el) el.remove(); renderView(); }
   catch (e) { toast(e.message); }
 }
 window.delGooddeedAtt = delGooddeedAtt;
@@ -631,8 +637,10 @@ async function saveEditGooddeed(id) {
   const content = document.getElementById('gd-edit').value.trim();
   if (!content) { toast('内容不能为空'); return; }
   try {
-    const d = await api('/api/gooddeeds/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
-    toast(`已保存`);
+    await api('/api/gooddeeds/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
+    const layer = document.getElementById('gd-edit-layer');
+    if (layer) layer.remove();
+    toast('已保存');
     renderView();
   } catch (e) { toast(e.message); }
 }
@@ -777,6 +785,8 @@ function renderAdmin(c) {
       <button class="${adminTab === 'teachings' ? 'active' : ''}" onclick="adminTabSwitch('teachings')">内容管理</button>
       <button class="${adminTab === 'users' ? 'active' : ''}" onclick="adminTabSwitch('users')">成员</button>
       <button class="${adminTab === 'checkins' ? 'active' : ''}" onclick="adminTabSwitch('checkins')">打卡内容</button>
+      <button class="${adminTab === 'gooddeeds' ? 'active' : ''}" onclick="adminTabSwitch('gooddeeds')">善叙述</button>
+      <button class="${adminTab === 'feedback' ? 'active' : ''}" onclick="adminTabSwitch('feedback')">反馈</button>
       <button class="${adminTab === 'settings' ? 'active' : ''}" onclick="adminTabSwitch('settings')">设置</button>
     </div>
     <div id="admin-body"><div class="empty">加载中…</div></div>`;
@@ -870,6 +880,39 @@ async function renderAdminBody() {
               <span class="muted">${fmtDate(ck.date)}${ck.note ? ' · ' + esc(ck.note) : ''} · ${fmtTime(ck.createdAt)}</span>
               <button class="btn small danger" onclick="delCheckin('${ck.id}')">删除</button>
             </div>`).join('') : '<div class="empty">暂无打卡记录</div>'}
+        </div>`;
+    } else if (adminTab === 'gooddeeds') {
+      const d = await api('/api/admin/gooddeeds');
+      box.innerHTML = `
+        <div class="card">
+          <h3>全部善叙述（${d.gooddeeds.length} 条）</h3>
+          ${d.gooddeeds.length ? d.gooddeeds.map(g => `
+            <div class="admin-row" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <span class="name">${esc(g.author.username)}</span>
+                <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.updatedAt)} · ${g.versionCount} 版 · 反馈 ${g.feedbackCount} 条</div>
+                <div style="font-size:13px;margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
+              </div>
+              <div style="white-space:nowrap;margin-left:8px">
+                <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
+                <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
+              </div>
+            </div>`).join('') : '<div class="empty">暂无善叙述</div>'}
+        </div>`;
+    } else if (adminTab === 'feedback') {
+      const d = await api('/api/admin/feedback');
+      box.innerHTML = `
+        <div class="card">
+          <h3>全部反馈（${d.feedback.length} 条）</h3>
+          ${d.feedback.length ? d.feedback.map(f => `
+            <div class="admin-row" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <span class="name">${esc(f.author)}</span>
+                <span class="muted">${fmtTime(f.createdAt)} · 针对 ${esc(f.targetTypeLabel)}${f.targetTitle ? '《' + esc(f.targetTitle) + '》' : ''}</span>
+                <div style="font-size:13px;margin-top:4px;white-space:pre-wrap">${esc(f.content)}</div>
+              </div>
+              <button class="btn small danger" onclick="delFeedback('${f.id}')">删除</button>
+            </div>`).join('') : '<div class="empty">暂无反馈</div>'}
         </div>`;
     } else if (adminTab === 'settings') {
       const me = await api('/api/me');

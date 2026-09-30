@@ -908,6 +908,59 @@ route('PUT', '/api/admin/settings', async (req, res) => {
   json(res, 200, { settings });
 });
 
+
+// 管理：全部善叙述（管理员）
+route('GET', '/api/admin/gooddeeds', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+  if (user.role !== 'admin') return err(res, 403, '仅管理员可查看');
+
+  const list = await q('SELECT * FROM gooddeeds ORDER BY updated_at DESC');
+  const result = await Promise.all((list || []).map(async (gd) => {
+    await pruneGoodDeedVersions(gd);
+    const author = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [gd.user_id]);
+    const feedbackCount = await countTable('feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+    return {
+      id: gd.id,
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      title: gd.title || '',
+      content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
+      teachingId: gd.teaching_id || null,
+      versionCount: gd.versions.length,
+      updatedAt: gd.updated_at, createdAt: gd.created_at,
+      feedbackCount: feedbackCount || 0,
+    };
+  }));
+  json(res, 200, { gooddeeds: result });
+});
+
+// 管理：全部反馈（管理员）
+route('GET', '/api/admin/feedback', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+  if (user.role !== 'admin') return err(res, 403, '仅管理员可查看');
+
+  const list = await q(
+    `SELECT f.*, u.username AS author_username,
+       t.title AS target_title, t.type AS target_type_label,
+       gd.title AS gooddeed_title
+     FROM feedback f
+     LEFT JOIN users u ON u.id = f.user_id
+     LEFT JOIN teachings t ON t.id = f.target_id AND f.target_type = 'teaching'
+     LEFT JOIN gooddeeds gd ON gd.id = f.target_id AND f.target_type = 'gooddeed'
+     ORDER BY f.created_at DESC`
+  );
+  json(res, 200, {
+    feedback: (list || []).map(f => ({
+      id: f.id, targetType: f.target_type, targetId: f.target_id,
+      targetTitle: f.gooddeed_title || f.target_title || null,
+      targetTypeLabel: f.target_type_label || f.target_type || null,
+      content: f.content, createdAt: f.created_at,
+      author: f.author_username || '(已移除)'
+    }))
+  });
+});
+
 route('GET', '/api/admin/checkins', async (req, res) => {
   const user = await authUser(req);
   if (!isAdmin(user)) return err(res, 403, '需要管理员权限');
