@@ -622,6 +622,34 @@ async function delFeedback(id) {
 }
 window.delFeedback = delFeedback;
 
+// 反馈操作守卫：他人反馈禁止改动，点击弹提示
+function fbGuard(mine, fn) {
+  if (!mine) { toast('禁止改动他人的反馈！'); return; }
+  fn();
+}
+window.fbGuard = fbGuard;
+
+// 弹窗放大/还原（手机小屏友好）
+function zoomLayer(boxId) {
+  const el = document.getElementById(boxId);
+  if (!el) return;
+  const btn = el.querySelector('button');
+  if (el.dataset.zoomed === '1') {
+    el.dataset.zoomed = '0';
+    el.style.width = '';
+    el.style.maxHeight = '';
+    el.style.fontSize = '';
+    if (btn) btn.textContent = '放大';
+  } else {
+    el.dataset.zoomed = '1';
+    el.style.width = '98vw';
+    el.style.maxHeight = '92vh';
+    el.style.fontSize = '17px';
+    if (btn) btn.textContent = '还原';
+  }
+}
+window.zoomLayer = zoomLayer;
+
 // 编辑反馈
 async function editFeedback(id, oldContent) {
   const newContent = prompt('修改反馈：', oldContent);
@@ -660,13 +688,13 @@ async function showGooddeedDetail(id) {
         ${renderAtts(gd.attachments, false, id)}
         <div class="ver-list">${gd.versions.map((v, i) => `<div class="ver-item">版本 ${i + 1}（${fmtTime(v.updatedAt)}）：${esc(v.content)}</div>`).join('')}</div>
         <div class="section-title" style="margin-top:10px">反馈（${d.feedback.length}）</div>
-        ${d.feedback.length ? d.feedback.map((f, i) => { const mine = f.authorId === state.user.id; return `<div class="fb-item"><span class="who">反馈${i + 1}，${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span> <button class="btn small ghost" ${mine ? '' : 'disabled style="opacity:.45"'} onclick="editFeedback('${f.id}','${esc(f.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button> <button class="btn small danger" ${mine ? '' : 'disabled style="opacity:.45"'} onclick="delFeedback('${f.id}')">删除</button></div>`; }).join('') : '<div class="muted small">暂无反馈</div>'}
+        ${d.feedback.length ? d.feedback.map((f, i) => { const mine = f.authorId === state.user.id; return `<div class="fb-item"><span class="who">反馈${i + 1}，${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span> <button class="btn small ghost" style="${mine ? '' : 'opacity:.45'}" onclick="fbGuard(${mine}, () => editFeedback('${f.id}','${esc(f.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}'))">编辑</button> <button class="btn small danger" style="${mine ? '' : 'opacity:.45'}" onclick="fbGuard(${mine}, () => delFeedback('${f.id}'))">删除</button></div>`; }).join('') : '<div class="muted small">暂无反馈</div>'}
       </div>`;
     const layer = document.createElement('div');
     layer.id = 'detail-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
-        <div style="position:sticky;top:0;text-align:right;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕ 关闭</button></div>
+      <div id="detail-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('detail-box')">放大</button><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕ 关闭</button></div>
         ${html}
       </div>`;
     document.body.appendChild(layer);
@@ -729,6 +757,7 @@ async function renderMine(c) {
       ${gdList.length ? gdList.map((g, i) => `
         <div class="item">
           <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : '（未命名）'}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
+          <div class="muted small" style="margin-top:2px">反馈 ${g.feedbackCount || 0} 条${g.teaching ? ' · 针对《' + esc(g.teaching.title) + '》' : ''}</div>
         </div>`).join('') : '<div class="empty">还没有善叙述</div>'}
     </div>`;
 }
@@ -767,7 +796,10 @@ async function viewFeedback(type, id) {
     const layer = document.createElement('div');
     layer.id = 'fb-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);z-index:51">${html}</div>`;
+      <div id="fb-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('fb-box')">放大</button><button class="btn small ghost" onclick="this.closest('#fb-layer').remove()">✕ 关闭</button></div>
+        ${html}
+      </div>`;
     document.body.appendChild(layer);
   } catch (e) { toast(e.message); }
 }
@@ -889,7 +921,7 @@ async function renderAdminBody() {
           ${d.checkins.length ? d.checkins.map(ck => `
             <div class="admin-row">
               <span class="name">${esc(ck.username)}</span>
-              <span class="muted">${fmtDate(ck.date)}${ck.note ? ' · ' + esc(ck.note) : ''} · ${fmtTime(ck.createdAt)}</span>
+              <span class="muted">${fmtDate(ck.date)}${ck.note ? ' · ' + esc(ck.note) : ''}</span>
               <button class="btn small danger" onclick="delCheckin('${ck.id}')">删除</button>
             </div>`).join('') : '<div class="empty">暂无打卡记录</div>'}
         </div>`;
