@@ -18,6 +18,13 @@ const state = {
   pendingTeachingTitle: null
 };
 
+// ---------------- 全局字体：善叙述与反馈统一 仿宋 小四（16px） ----------------
+(function () {
+  const st = document.createElement('style');
+  st.textContent = ".body,.ver-item,.fb-item,.gd-content,.fb-content,textarea{font-family:'仿宋','FangSong','STFangsong','FangSong_GB2312',serif !important;font-size:16px !important;line-height:1.8 !important;}";
+  document.head.appendChild(st);
+})();
+
 // ---------------- 工具 ----------------
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -567,7 +574,7 @@ async function openEditGooddeed(id, content) {
   layer.id = 'gd-edit-layer';
   layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
     <div id="gd-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51;background:#fff;border-radius:12px;padding:16px">
-      <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;margin:-16px -16px 8px;padding:6px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#gd-edit-layer').remove()">✕</button></div>
+      <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;margin:-16px -16px 8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('gd-edit-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('gd-edit-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#gd-edit-layer').remove()">✕</button></div>
       <h3 style="margin-top:8px">编辑善叙述</h3>
       <div class="field"><textarea id="gd-edit" style="min-height:120px">${esc(content)}</textarea></div>
       ${renderAtts(atts, true, id)}
@@ -640,7 +647,12 @@ window.fbGuard = fbGuard;
 function zoomLayer(boxId, dir) {
   const el = document.getElementById(boxId);
   if (!el) return;
-  if (dir === 0) { el.style.cssText = ''; return; }
+  if (dir === 0) {
+    el.style.cssText = '';
+    const r = el.querySelector('input[type=range]');
+    if (r) r.value = 1;
+    return;
+  }
   const cur = parseFloat(el.style.zoom) || 1;
   let next = Math.round((cur + dir * 0.1) * 10) / 10;
   next = Math.max(0.8, Math.min(1.5, next));
@@ -650,13 +662,25 @@ function zoomLayer(boxId, dir) {
 }
 window.zoomLayer = zoomLayer;
 
+// 滑块控制缩放（0.8~1.5，拖动即缩放整个窗口，手指友好）
+function zoomLayerRange(boxId, val) {
+  const el = document.getElementById(boxId);
+  if (!el) return;
+  let z = Math.round(parseFloat(val) * 10) / 10;
+  z = Math.max(0.8, Math.min(1.5, z));
+  el.style.zoom = z;
+  el.style.width = Math.round(90 / z) + 'vw';
+  el.style.maxHeight = Math.round(80 / z) + 'vh';
+}
+window.zoomLayerRange = zoomLayerRange;
+
 // 编辑反馈（自定义弹窗，可缩放）
 async function editFeedback(id, oldContent) {
   const layer = document.createElement('div');
   layer.id = 'fb-edit-layer';
   layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60" onclick="this.parentElement.remove()"></div>
     <div id="fb-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:61;background:#fff;border-radius:12px;padding:16px">
-      <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;margin:-16px -16px 8px;padding:6px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#fb-edit-layer').remove()">✕</button></div>
+      <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;margin:-16px -16px 8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('fb-edit-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('fb-edit-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#fb-edit-layer').remove()">✕</button></div>
       <h3 style="margin-top:8px">修改反馈</h3>
       <div class="field"><textarea id="fb-edit" style="min-height:120px">${esc(oldContent)}</textarea></div>
       <div class="form-actions">
@@ -713,7 +737,7 @@ async function showGooddeedDetail(id) {
     layer.id = 'detail-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
       <div id="detail-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
-        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('detail-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('detail-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('detail-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕</button></div>
+        <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('detail-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('detail-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#detail-layer').remove()">✕</button></div>
         ${html}
       </div>`;
     document.body.appendChild(layer);
@@ -823,7 +847,7 @@ async function viewFeedback(type, id) {
     layer.id = 'fb-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
       <div id="fb-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
-        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('fb-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('fb-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('fb-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#fb-layer').remove()">✕</button></div>
+        <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('fb-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('fb-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#fb-layer').remove()">✕</button></div>
         ${html}
       </div>`;
     document.body.appendChild(layer);
@@ -971,7 +995,7 @@ async function renderAdminBody() {
               <div style="flex:1;min-width:0">
                 <span class="name">${esc(g.author.username)}</span>
                 <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.updatedAt)} · ${g.versionCount} 版 · 反馈 ${g.feedbackCount} 条</div>
-                <div style="font-size:13px;margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
+                <div class="gd-content" style="margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
               </div>
               <div style="white-space:nowrap;margin-left:8px">
                 <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
@@ -989,7 +1013,7 @@ async function renderAdminBody() {
               <div style="flex:1;min-width:0">
                 <span class="name">${esc(f.author)}</span>
                 <span class="muted">${fmtTime(f.createdAt)} · 针对 ${esc(f.targetTypeLabel)}${f.targetTitle ? '《' + esc(f.targetTitle) + '》' : ''}</span>
-                <div style="font-size:13px;margin-top:4px;white-space:pre-wrap">${esc(f.content)}</div>
+                <div class="fb-content" style="margin-top:4px;white-space:pre-wrap">${esc(f.content)}</div>
               </div>
               <button class="btn small danger" onclick="delFeedback('${f.id}')">删除</button>
             </div>`).join('') : '<div class="empty">暂无反馈</div>'}
