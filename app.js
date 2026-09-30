@@ -780,7 +780,11 @@ async function renderMine(c) {
   ]);
   // 按日期统计打卡次数
   const byDate = {};
-  (checkins.checkins || []).forEach(ck => { byDate[ck.date] = (byDate[ck.date] || 0) + 1; });
+  const titleByCk = {};
+  (checkins.checkins || []).forEach(ck => {
+    byDate[ck.date] = (byDate[ck.date] || 0) + 1;
+    if (ck.title && !titleByCk[ck.date]) titleByCk[ck.date] = ck.title;
+  });
   // 题目索引：安排日期 -> 偈语/开示题目；周期题目：当天处于进行中周期内时延续显示
   const { titleByDate, cycleTitle } = await buildScheduleMap();
   const dates = Object.keys(byDate).sort().reverse();
@@ -799,7 +803,7 @@ async function renderMine(c) {
       ${dates.length ? dates.map(d => `
         <div class="roster-row">
           <span class="dot done"></span>
-          <span class="roster-name">${esc(state.user.username)} · ${esc(titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${fmtDate(d)} · ${byDate[d]} 次</span>
+          <span class="roster-name">${esc(state.user.username)} · ${esc(titleByCk[d] || titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${fmtDate(d)} · ${byDate[d]} 次</span>
         </div>`).join('') : '<div class="empty">还没有打卡记录</div>'}
     </div>
     <div class="card">
@@ -970,9 +974,10 @@ async function renderAdminBody() {
       const agg = {};
       (d.checkins || []).forEach(ck => {
         const k = (ck.username || '(已移除)') + '|' + ck.date;
-        if (!agg[k]) agg[k] = { username: ck.username || '(已移除)', date: ck.date, n: 0, ids: [] };
+        if (!agg[k]) agg[k] = { username: ck.username || '(已移除)', date: ck.date, n: 0, ids: [], title: '' };
         agg[k].n++;
         agg[k].ids.push(ck.id);
+        if (!agg[k].title && ck.title) agg[k].title = ck.title;
       });
       const rows = Object.values(agg);
       box.innerHTML = `
@@ -981,7 +986,7 @@ async function renderAdminBody() {
           ${rows.length ? rows.map(r => `
             <div class="admin-row">
               <span class="name">${esc(r.username)}</span>
-              <span class="muted">${esc(sch.titleByDate[r.date] || sch.cycleTitle(r.date) || '（当日无安排）')} · ${fmtDate(r.date)} · ${r.n} 次</span>
+              <span class="muted">${esc(r.title || sch.titleByDate[r.date] || sch.cycleTitle(r.date) || '（当日无安排）')} · ${fmtDate(r.date)} · ${r.n} 次</span>
               <button class="btn small danger" onclick="delCheckins(['${r.ids.join("','")}'])">删除</button>
             </div>`).join('') : '<div class="empty">暂无打卡记录</div>'}
         </div>`;

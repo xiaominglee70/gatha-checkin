@@ -476,6 +476,16 @@ route('POST', '/api/checkins', async (req, res) => {
     id: uid(), user_id: user.id, date: today,
     note: String(body.note || '').trim().slice(0, 500),
   };
+  // 快照当天安排题目：优先当日 scheduled_date，其次进行中周期；失败不影响打卡
+  try {
+    const t = await qOne(
+      `SELECT title FROM teachings WHERE scheduled_date = $1
+       UNION ALL
+       SELECT t2.title FROM cycles c JOIN teachings t2 ON t2.id = ANY(c.teaching_ids)
+       WHERE c.status = 'active' AND c.start_date <= $1 AND (c.end_date IS NULL OR c.end_date >= $1)
+       LIMIT 1`, [today]);
+    if (t && t.title) rec.title = t.title;
+  } catch (e) { console.log('[Checkin] 标题快照失败:', e.message); }
   await insertRow('checkins', rec);
 
   const count = await countTable('checkins WHERE user_id = $1 AND date = $2', [user.id, today]);
@@ -1045,6 +1055,10 @@ const server = http.createServer(async (req, res) => {
 // ---------------- 首次启动种子数据 ----------------
 async function seed() {
   try {
+    // 迁移：打卡记录增加 title 列（打卡时快照当天安排题目，安排被覆盖后历史标题仍可显示）
+    try { await pool.query('ALTER TABLE checkins ADD COLUMN IF NOT EXISTS title TEXT'); }
+    catch (e) { console.log('[Seed] checkins.title 迁移:', e.message); }
+
     const userCount = await countTable('users');
     if (userCount === 0) {
       const salt = crypto.randomBytes(12).toString('hex');
