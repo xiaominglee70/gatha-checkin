@@ -196,7 +196,7 @@ async function renderHome(c) {
             <span class="dot ${r.done ? 'done' : 'pending'}"></span>
             <span class="roster-name" style="flex:2">${esc(r.user.username)}${r.user.role === 'admin' ? '（管理员）' : ''}</span>
             <span class="roster-title">${homeData.daily ? esc(r.lastTitle || homeData.daily.title || '(无标题)') : '—'}</span>
-            <span class="roster-time">${r.done ? fmtTime(r.lastAt) : '未打卡'}</span>
+            <span class="roster-time">${r.done ? fmtTime(r.lastAt) : '未打卡 · ' + fmtDate(homeData.today.date)}</span>
           </div>`).join('')}
         ${undone.length ? `<div class="muted" style="margin-top:10px;font-size:12px">还差：${undone.map(r => esc(r.user.username)).join('、')}</div>` : ''}
       </div>
