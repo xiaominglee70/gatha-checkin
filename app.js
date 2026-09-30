@@ -566,8 +566,9 @@ async function openEditGooddeed(id, content) {
   const layer = document.createElement('div');
   layer.id = 'gd-edit-layer';
   layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-    <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51;background:#fff;border-radius:12px;padding:16px">
-      <h3 style="margin-top:0">编辑善叙述</h3>
+    <div id="gd-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51;background:#fff;border-radius:12px;padding:16px">
+      <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;margin:-16px -16px 8px;padding:6px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('gd-edit-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#gd-edit-layer').remove()">✕</button></div>
+      <h3 style="margin-top:8px">编辑善叙述</h3>
       <div class="field"><textarea id="gd-edit" style="min-height:120px">${esc(content)}</textarea></div>
       ${renderAtts(atts, true, id)}
       <div class="field"><label>添加文档附件（PDF / Word，可选）</label><input id="gd-add-file-${id}" type="file" accept=".pdf,.doc,.docx" multiple></div>
@@ -634,33 +635,53 @@ function fbGuard(mine, fn) {
 }
 window.fbGuard = fbGuard;
 
-// 弹窗缩放：− / ＋ 步进调节（想多大就点几次＋），还原彻底清除内联样式恢复初始
+// 弹窗整体缩放：− / ＋ 步进放大，整个窗口所有内容（含小字）等比放大；
+// 基础宽高按比例缩小，保证放大后视觉尺寸基本不超屏；还原彻底清除缩放
 function zoomLayer(boxId, dir) {
   const el = document.getElementById(boxId);
   if (!el) return;
   if (dir === 0) { el.style.cssText = ''; return; }
-  const cur = parseFloat(el.style.width) || 92;
-  let next = cur + dir * 8;
-  next = Math.max(60, Math.min(100, next));
-  el.style.width = next + 'vw';
-  el.style.maxHeight = Math.round(70 + (next - 60) * 0.8) + 'vh';
-  el.style.fontSize = (15 + Math.round((next - 60) / 8)) + 'px';
+  const cur = parseFloat(el.style.zoom) || 1;
+  let next = Math.round((cur + dir * 0.1) * 10) / 10;
+  next = Math.max(0.8, Math.min(1.5, next));
+  el.style.zoom = next;
+  el.style.width = Math.round(90 / next) + 'vw';
+  el.style.maxHeight = Math.round(80 / next) + 'vh';
 }
 window.zoomLayer = zoomLayer;
 
-// 编辑反馈
+// 编辑反馈（自定义弹窗，可缩放）
 async function editFeedback(id, oldContent) {
-  const newContent = prompt('修改反馈：', oldContent);
-  if (newContent === null) return;
-  const trimmed = newContent.trim();
-  if (!trimmed) { toast('内容不能为空'); return; }
+  const layer = document.createElement('div');
+  layer.id = 'fb-edit-layer';
+  layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60" onclick="this.parentElement.remove()"></div>
+    <div id="fb-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:61;background:#fff;border-radius:12px;padding:16px">
+      <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;margin:-16px -16px 8px;padding:6px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('fb-edit-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#fb-edit-layer').remove()">✕</button></div>
+      <h3 style="margin-top:8px">修改反馈</h3>
+      <div class="field"><textarea id="fb-edit" style="min-height:120px">${esc(oldContent)}</textarea></div>
+      <div class="form-actions">
+        <button class="btn primary small" onclick="saveEditFeedback('${id}')">保存</button>
+        <button class="btn ghost small" onclick="this.closest('#fb-edit-layer').remove()">取消</button>
+      </div>
+    </div>`;
+  document.body.appendChild(layer);
+  const ta = document.getElementById('fb-edit');
+  if (ta) ta.focus();
+}
+window.editFeedback = editFeedback;
+
+async function saveEditFeedback(id) {
+  const content = document.getElementById('fb-edit').value.trim();
+  if (!content) { toast('内容不能为空'); return; }
   try {
-    await api('/api/feedback/' + id, { method: 'PUT', body: JSON.stringify({ content: trimmed }) });
+    await api('/api/feedback/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
+    const layer = document.getElementById('fb-edit-layer');
+    if (layer) layer.remove();
     toast('反馈已修改');
     renderView();
   } catch (e) { toast(e.message); }
 }
-window.editFeedback = editFeedback;
+window.saveEditFeedback = saveEditFeedback;
 
 async function saveEditGooddeed(id) {
   const content = document.getElementById('gd-edit').value.trim();
