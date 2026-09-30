@@ -28,7 +28,12 @@ function fmtTime(iso) {
   const p = n => String(n).padStart(2, '0');
   return `${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function fmtDate(s) { return s || '—'; }
+function fmtDate(s) {
+  if (!s) return '—';
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日';
+  return s;
+}
 function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(() => fn.apply(null, arguments), ms); }; }
 let toastTimer = null;
 function toast(msg) {
@@ -629,24 +634,17 @@ function fbGuard(mine, fn) {
 }
 window.fbGuard = fbGuard;
 
-// 弹窗放大/还原（手机小屏友好）
-function zoomLayer(boxId) {
+// 弹窗缩放：− / ＋ 步进调节（想多大就点几次＋），还原彻底清除内联样式恢复初始
+function zoomLayer(boxId, dir) {
   const el = document.getElementById(boxId);
   if (!el) return;
-  const btn = el.querySelector('button');
-  if (el.dataset.zoomed === '1') {
-    el.dataset.zoomed = '0';
-    el.style.width = '';
-    el.style.maxHeight = '';
-    el.style.fontSize = '';
-    if (btn) btn.textContent = '放大';
-  } else {
-    el.dataset.zoomed = '1';
-    el.style.width = '98vw';
-    el.style.maxHeight = '92vh';
-    el.style.fontSize = '17px';
-    if (btn) btn.textContent = '还原';
-  }
+  if (dir === 0) { el.style.cssText = ''; return; }
+  const cur = parseFloat(el.style.width) || 92;
+  let next = cur + dir * 8;
+  next = Math.max(60, Math.min(100, next));
+  el.style.width = next + 'vw';
+  el.style.maxHeight = Math.round(70 + (next - 60) * 0.8) + 'vh';
+  el.style.fontSize = (15 + Math.round((next - 60) / 8)) + 'px';
 }
 window.zoomLayer = zoomLayer;
 
@@ -693,8 +691,8 @@ async function showGooddeedDetail(id) {
     const layer = document.createElement('div');
     layer.id = 'detail-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div id="detail-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
-        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('detail-box')">放大</button><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕ 关闭</button></div>
+      <div id="detail-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('detail-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('detail-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('detail-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕</button></div>
         ${html}
       </div>`;
     document.body.appendChild(layer);
@@ -702,24 +700,16 @@ async function showGooddeedDetail(id) {
 }
 window.showGooddeedDetail = showGooddeedDetail;
 
-// ================= 我的 =================
-async function renderMine(c) {
-  c.innerHTML = '<div class="empty">加载中…</div>';
-  const [checkins, mine, teachings, cycles] = await Promise.all([
-    api('/api/checkins/mine'),
-    api('/api/gooddeeds/mine'),
+// 题目映射：安排日期 -> 偈语/开示题目；周期题目：当天处于进行中周期内时延续显示
+async function buildScheduleMap() {
+  const [teachings, cycles] = await Promise.all([
     api('/api/teachings'),
     api('/api/cycles')
   ]);
-  // 按日期统计打卡次数
-  const byDate = {};
-  (checkins.checkins || []).forEach(ck => { byDate[ck.date] = (byDate[ck.date] || 0) + 1; });
-  // 题目索引：安排日期 -> 偈语/开示题目
   const titleByDate = {};
   (teachings.teachings || []).forEach(t => {
     if (t.scheduledDate && !titleByDate[t.scheduledDate]) titleByDate[t.scheduledDate] = t.title || '(无标题)';
   });
-  // 周期题目：当天处于某个进行中周期内时，延续显示该周期安排的题目
   const dayKey = d => String(d).slice(0, 10);
   const activeCycles = (cycles.cycles || []).filter(cy => cy.status === 'active');
   function cycleTitle(d) {
@@ -733,6 +723,21 @@ async function renderMine(c) {
     }
     return '';
   }
+  return { titleByDate, cycleTitle };
+}
+
+// ================= 我的 =================
+async function renderMine(c) {
+  c.innerHTML = '<div class="empty">加载中…</div>';
+  const [checkins, mine] = await Promise.all([
+    api('/api/checkins/mine'),
+    api('/api/gooddeeds/mine')
+  ]);
+  // 按日期统计打卡次数
+  const byDate = {};
+  (checkins.checkins || []).forEach(ck => { byDate[ck.date] = (byDate[ck.date] || 0) + 1; });
+  // 题目索引：安排日期 -> 偈语/开示题目；周期题目：当天处于进行中周期内时延续显示
+  const { titleByDate, cycleTitle } = await buildScheduleMap();
   const dates = Object.keys(byDate).sort().reverse();
   const gdList = mine.gooddeeds || [];
   c.innerHTML = `
@@ -749,7 +754,7 @@ async function renderMine(c) {
       ${dates.length ? dates.map(d => `
         <div class="roster-row">
           <span class="dot done"></span>
-          <span class="roster-name">${fmtDate(d)} · ${esc(titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${byDate[d]} 次</span>
+          <span class="roster-name">${esc(state.user.username)} · ${esc(titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${fmtDate(d)} · ${byDate[d]} 次</span>
         </div>`).join('') : '<div class="empty">还没有打卡记录</div>'}
     </div>
     <div class="card">
@@ -796,8 +801,8 @@ async function viewFeedback(type, id) {
     const layer = document.createElement('div');
     layer.id = 'fb-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div id="fb-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
-        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('fb-box')">放大</button><button class="btn small ghost" onclick="this.closest('#fb-layer').remove()">✕ 关闭</button></div>
+      <div id="fb-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="zoomLayer('fb-box',-1)">−</button><button class="btn small ghost" onclick="zoomLayer('fb-box',1)">＋</button><button class="btn small ghost" onclick="zoomLayer('fb-box',0)">还原</button><button class="btn small ghost" onclick="this.closest('#fb-layer').remove()">✕</button></div>
         ${html}
       </div>`;
     document.body.appendChild(layer);
@@ -915,14 +920,24 @@ async function renderAdminBody() {
         </div>`;
     } else if (adminTab === 'checkins') {
       const d = await api('/api/admin/checkins');
+      const sch = await buildScheduleMap();
+      // 按 人名+日期 聚合：显示 人名 · 标题 · 某年某月某日 · 次数
+      const agg = {};
+      (d.checkins || []).forEach(ck => {
+        const k = (ck.username || '(已移除)') + '|' + ck.date;
+        if (!agg[k]) agg[k] = { username: ck.username || '(已移除)', date: ck.date, n: 0, ids: [] };
+        agg[k].n++;
+        agg[k].ids.push(ck.id);
+      });
+      const rows = Object.values(agg);
       box.innerHTML = `
         <div class="card">
-          <h3>全部打卡记录（${d.checkins.length} 条）</h3>
-          ${d.checkins.length ? d.checkins.map(ck => `
+          <h3>打卡记录（${rows.length} 条）</h3>
+          ${rows.length ? rows.map(r => `
             <div class="admin-row">
-              <span class="name">${esc(ck.username)}</span>
-              <span class="muted">${fmtDate(ck.date)}${ck.note ? ' · ' + esc(ck.note) : ''}</span>
-              <button class="btn small danger" onclick="delCheckin('${ck.id}')">删除</button>
+              <span class="name">${esc(r.username)}</span>
+              <span class="muted">${esc(sch.titleByDate[r.date] || sch.cycleTitle(r.date) || '（当日无安排）')} · ${fmtDate(r.date)} · ${r.n} 次</span>
+              <button class="btn small danger" onclick="delCheckins(['${r.ids.join("','")}'])">删除</button>
             </div>`).join('') : '<div class="empty">暂无打卡记录</div>'}
         </div>`;
     } else if (adminTab === 'gooddeeds') {
@@ -1060,6 +1075,16 @@ async function delCheckin(id) {
   catch (e) { toast(e.message); }
 }
 window.delCheckin = delCheckin;
+
+// 批量删除打卡记录（按 人名+日期 聚合行，删除当天该用户全部打卡）
+function delCheckins(ids) {
+  if (!ids || !ids.length) return;
+  if (!confirm('确定删除这 ' + ids.length + ' 条打卡记录？')) return;
+  Promise.all(ids.map(id => api('/api/admin/checkins/' + id, { method: 'DELETE' })))
+    .then(() => { toast('已删除'); renderAdminBody(); })
+    .catch(e => toast(e.message));
+}
+window.delCheckins = delCheckins;
 
 async function saveLimit() {
   const v = parseInt(document.getElementById('a-limit').value, 10);
