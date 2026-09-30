@@ -320,11 +320,13 @@ route('GET', '/api/teachings', async (req, res) => {
   sql += ' ORDER BY created_at DESC';
 
   const list = await q(sql, params);
+  const total = await countTable('teachings' + (type ? ' WHERE type = $1' : ''), type ? [type] : []);
   json(res, 200, {
     teachings: (list || []).map(x => ({
       id: x.id, type: x.type, title: x.title, content: x.content, source: x.source,
       scheduledDate: x.scheduled_date, fileName: x.file_name || null, updatedAt: x.updated_at
-    }))
+    })),
+    total: total || 0
   });
 });
 
@@ -652,7 +654,7 @@ route('GET', '/api/gooddeeds/:id', async (req, res) => {
     },
     feedback: (feedbackList || []).map(f => ({
       id: f.id, content: f.content, createdAt: f.created_at,
-      author: f.author_username || '(已移除)'
+      author: f.author_username || '(已移除)', authorId: f.user_id || null
     }))
   });
 });
@@ -750,7 +752,7 @@ route('GET', '/api/feedback', async (req, res) => {
     feedback: (list || []).map(f => ({
       id: f.id, targetType: f.target_type, targetId: f.target_id,
       content: f.content, createdAt: f.created_at,
-      author: f.author_username || '(已移除)'
+      author: f.author_username || '(已移除)', authorId: f.user_id || null
     }))
   });
 });
@@ -956,7 +958,7 @@ route('GET', '/api/admin/feedback', async (req, res) => {
       targetTitle: f.gooddeed_title || f.target_title || null,
       targetTypeLabel: f.target_type_label || f.target_type || null,
       content: f.content, createdAt: f.created_at,
-      author: f.author_username || '(已移除)'
+      author: f.author_username || '(已移除)', authorId: f.user_id || null
     }))
   });
 });
@@ -1082,3 +1084,41 @@ seed().then(() => {
     }
   });
 });
+
+
+// ---------------- Telegram 待打卡提醒（默认每天 20:00，可用环境变量 REMIND_HOUR / REMIND_MINUTE 调整） ----------------
+async function tgSend(chatId, text) {
+  if (!BOT_TOKEN) { console.log('[提醒] BOT_TOKEN 未配置，跳过推送'); return; }
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+    const j = await r.json();
+    if (!j.ok) console.log('[提醒] 发送失败:', j.description || '未知错误');
+  } catch (e) { console.log('[提醒] 发送异常:', e.message); }
+}
+
+const REMIND_HOUR = Number(process.env.REMIND_HOUR || 20);
+const REMIND_MINUTE = Number(process.env.REMIND_MINUTE || 0);
+let lastRemindDate = '';
+setInterval(async () => {
+  try {
+    const now = new Date();
+    if (now.getHours() !== REMIND_HOUR || now.getMinutes() !== REMIND_MINUTE) return;
+    const today = todayStr();
+    if (lastRemindDate === today) return;
+    lastRemindDate = today;
+    const doneRows = await q('SELECT DISTINCT user_id FROM checkins WHERE date = $1', [today]);
+    const doneSet = new Set((doneRows || []).map(r => r.user_id));
+    const allUsers = await q('SELECT * FROM users WHERE telegram_id IS NOT NULL');
+    let sent = 0;
+    for (const u of allUsers || []) {
+      if (doneSet.has(u.id)) continue;
+      await tgSend(u.telegram_id, '温馨提醒，今日待打卡！');
+      sent++;
+    }
+    console.log(`[提醒] ${today} ${REMIND_HOUR}:${REMIND_MINUTE} 已提醒 ${sent} 人`);
+  } catch (e) { console.log('[提醒] 运行错误:', e.message); }
+}, 60000);

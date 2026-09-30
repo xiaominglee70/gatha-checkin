@@ -207,12 +207,15 @@ window.doCheckin = doCheckin;
 async function renderTeachings(c) {
   c.innerHTML = `
     <div class="card">
+      <div class="muted small" style="margin-bottom:6px">一共有 <b id="tg-total">…</b> 条${state.tgType === '开示' ? '开示' : '偈语'}</div>
       <div class="field"><input id="tg-search" type="text" placeholder="搜索${state.tgType === '开示' ? '开示' : '偈语'}…" value="${esc(state.q || '')}"></div>
     </div>
     <div id="tg-list"><div class="empty">加载中…</div></div>`;
   const cyclesData = await api('/api/cycles');
   const loadList = async () => {
     const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
+    const tt = document.getElementById('tg-total');
+    if (tt) tt.textContent = d.total || 0;
     renderTeachingList(d.teachings, cyclesData.cycles || []);
   };
   document.getElementById('tg-search').addEventListener('input', debounce(async () => {
@@ -657,12 +660,15 @@ async function showGooddeedDetail(id) {
         ${renderAtts(gd.attachments, false, id)}
         <div class="ver-list">${gd.versions.map((v, i) => `<div class="ver-item">版本 ${i + 1}（${fmtTime(v.updatedAt)}）：${esc(v.content)}</div>`).join('')}</div>
         <div class="section-title" style="margin-top:10px">反馈（${d.feedback.length}）</div>
-        ${d.feedback.length ? d.feedback.map(f => `<div class="fb-item"><span class="who">${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span></div>`).join('') : '<div class="muted small">暂无反馈</div>'}
+        ${d.feedback.length ? d.feedback.map((f, i) => { const mine = f.authorId === state.user.id; return `<div class="fb-item"><span class="who">反馈${i + 1}，${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span> <button class="btn small ghost" ${mine ? '' : 'disabled style="opacity:.45"'} onclick="editFeedback('${f.id}','${esc(f.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button> <button class="btn small danger" ${mine ? '' : 'disabled style="opacity:.45"'} onclick="delFeedback('${f.id}')">删除</button></div>`; }).join('') : '<div class="muted small">暂无反馈</div>'}
       </div>`;
     const layer = document.createElement('div');
     layer.id = 'detail-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">${html}</div>`;
+      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;text-align:right;padding:6px;background:rgba(255,255,255,.9)"><button class="btn small ghost" onclick="this.closest('#detail-layer').remove()">✕ 关闭</button></div>
+        ${html}
+      </div>`;
     document.body.appendChild(layer);
   } catch (e) { toast(e.message); }
 }
@@ -778,6 +784,7 @@ window.popSubmit = popSubmit;
 
 // ================= 管理 =================
 let adminTab = 'teachings';
+let adminSubTab = '偈语';
 function renderAdmin(c) {
   c = c || document.getElementById('content');
   c.innerHTML = `
@@ -793,6 +800,7 @@ function renderAdmin(c) {
   renderAdminBody();
 }
 window.adminTabSwitch = function (t) { adminTab = t; renderAdmin(document.getElementById('content')); };
+window.adminSubSwitch = function (t) { adminSubTab = t; renderAdminBody(); };
 
 async function renderAdminBody() {
   const box = document.getElementById('admin-body');
@@ -816,10 +824,14 @@ async function renderAdminBody() {
             </div>
           </div>
         </div>
-        <div class="section-title">内容列表（${d.teachings.length}）</div>
-        ${d.teachings.map(t => `
+        <div class="tabs" style="margin:12px 0 0">
+          <button class="${adminSubTab === '偈语' ? 'active' : ''}" onclick="adminSubSwitch('偈语')">偈语</button>
+          <button class="${adminSubTab === '开示' ? 'active' : ''}" onclick="adminSubSwitch('开示')">开示</button>
+        </div>
+        <div class="section-title">${adminSubTab}列表（${d.teachings.filter(t => t.type === adminSubTab).length}）</div>
+        ${d.teachings.filter(t => t.type === adminSubTab).map(t => `
           <div class="item">
-            <div class="head"><span class="title">${esc(t.type)} · ${esc(t.title || '(无标题)')}</span><span class="meta">${t.type}</span></div>
+            <div class="head"><span class="title">${esc(t.title || '(无标题)')}</span><span class="meta">${t.type}</span></div>
             <div class="body">${esc(t.content)}</div>
             <div class="actions">
               <button class="btn small ghost" onclick="editTeachingById('${t.id}')">编辑</button>
