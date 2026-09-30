@@ -498,7 +498,7 @@ route('GET', '/api/checkins/today', async (req, res) => {
 
   const today = todayStr();
   const allUsers = await q('SELECT * FROM users ORDER BY username ASC');
-  const todayCheckins = await q('SELECT * FROM checkins WHERE date = $1', [today]);
+  const todayCheckins = await q('SELECT * FROM checkins WHERE date = $1 ORDER BY created_at ASC', [today]);
 
   const roster = (allUsers || []).map(u => {
     const mine = (todayCheckins || []).filter(c => c.user_id === u.id);
@@ -508,6 +508,7 @@ route('GET', '/api/checkins/today', async (req, res) => {
       count: mine.length,
       lastNote: mine.length ? mine[mine.length - 1].note : null,
       lastAt: mine.length ? mine[mine.length - 1].created_at : null,
+      lastTitle: mine.length ? mine[mine.length - 1].title : null,
     };
   });
 
