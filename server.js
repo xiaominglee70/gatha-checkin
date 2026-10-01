@@ -642,13 +642,15 @@ route('PUT', '/api/gooddeeds/:id', async (req, res) => {
   const content = String(body.content || '').trim();
   if (!content) return err(res, 400, '内容不能为空');
 
+  // gooddeeds 表没有 content 列，内容保存在 versions（JSONB 数组）里；
+  // 编辑时在历史版本后追加新版本，保留版本记录
+  const prevVersions = Array.isArray(gd.versions) ? gd.versions : [];
   const updates = {
-    content,
-    versions: [{ content, updated_at: nowIso() }],
+    versions: [...prevVersions, { content, updated_at: nowIso() }],
     updated_at: nowIso(),
   };
   await updateRow('gooddeeds', updates, 'id', gd.id);
-  json(res, 200, { gooddeed: { id: gd.id, versions: updates.versions, versionCount: 1 } });
+  json(res, 200, { gooddeed: { id: gd.id, versions: updates.versions, versionCount: updates.versions.length } });
 });
 
 route('GET', '/api/gooddeeds/:id', async (req, res) => {
