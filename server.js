@@ -34,9 +34,22 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 // ---------------- 工具函数 ----------------
 function uid() { return crypto.randomUUID(); }
 function nowIso() { return new Date().toISOString(); }
+// 业务时区：蒙特利尔（America/Toronto，自动处理夏令时）。
+// 服务器（Render）时钟是 UTC，必须显式按业务时区取"今天"的日期，
+// 否则蒙特利尔晚上 23 点后程序会误判为第二天，导致"今日无安排"。
+const BIZ_TZ = 'America/Toronto';
 function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BIZ_TZ, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const g = t => parts.find(p => p.type === t).value;
+  return `${g('year')}-${g('month')}-${g('day')}`;
+}
+// 在某个日期字符串（YYYY-MM-DD）上加 days 天（纯字符串日期算术，避免 UTC 干扰）
+function addDaysToDateStr(dateStr, days) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
 }
 
 function hashPassword(password, salt) {
@@ -430,9 +443,7 @@ route('POST', '/api/cycles', async (req, res) => {
 
   let endDate = body.endDate || null;
   if (!endDate && body.days && parseInt(body.days) > 0) {
-    const d = new Date(); d.setDate(d.getDate() + parseInt(body.days) - 1);
-    const p = n => String(n).padStart(2, '0');
-    endDate = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+    endDate = addDaysToDateStr(todayStr(), parseInt(body.days) - 1);
   }
 
   // 清除今天已有的旧安排，避免首页显示过期的偈语/开示
@@ -1120,8 +1131,13 @@ const REMIND_MINUTE = Number(process.env.REMIND_MINUTE || 0);
 let lastRemindDate = '';
 setInterval(async () => {
   try {
-    const now = new Date();
-    if (now.getHours() !== REMIND_HOUR || now.getMinutes() !== REMIND_MINUTE) return;
+    // 提醒时刻按蒙特利尔本地时间判断（服务器时钟是 UTC，不能直接用 getHours）
+    const nowParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: BIZ_TZ, hour: 'numeric', minute: 'numeric', hourCycle: 'h23'
+    }).formatToParts(new Date());
+    const nowHour = Number(nowParts.find(p => p.type === 'hour').value);
+    const nowMinute = Number(nowParts.find(p => p.type === 'minute').value);
+    if (nowHour !== REMIND_HOUR || nowMinute !== REMIND_MINUTE) return;
     const today = todayStr();
     if (lastRemindDate === today) return;
     lastRemindDate = today;
