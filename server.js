@@ -304,8 +304,15 @@ route('GET', '/api/daily', async (req, res) => {
   if (!user) return err(res, 401, '未登录');
 
   const today = todayStr();
-  // 只显示当天安排的内容；当日无安排则不展示（不向后回退、不取最新一条）
-  const teaching = await qOne('SELECT * FROM teachings WHERE scheduled_date = $1 ORDER BY created_at DESC LIMIT 1', [today]);
+  // 当天显式安排优先；没有显式安排时，若进行中的多天周期覆盖今天（延续安排），则显示周期第一条内容
+  const teaching = await qOne(
+    `SELECT * FROM (
+       SELECT t1.*, 1 AS prio FROM teachings t1 WHERE t1.scheduled_date = $1
+       UNION ALL
+       SELECT t2.*, 2 AS prio FROM cycles c JOIN teachings t2 ON t2.id = c.teaching_ids[1]
+       WHERE c.status = 'active' AND c.start_date <= $1 AND (c.end_date IS NULL OR c.end_date >= $1)
+     ) sub ORDER BY prio, created_at DESC LIMIT 1`,
+    [today]);
   const note = '今日安排';
 
   json(res, 200, {
