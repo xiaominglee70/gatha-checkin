@@ -1019,12 +1019,12 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8', '.json': 'application/json; charset=utf-8'
 };
 
-// 查找静态文件：优先根目录，其次 public/ 子目录
+// 查找静态文件：优先 public/ 子目录（最新版），其次根目录（兼容旧残留）
 function findStatic(name) {
-  const rootFile = path.join(__dirname, name);
-  if (fs.existsSync(rootFile) && fs.statSync(rootFile).isFile()) return rootFile;
   const pubFile = path.join(__dirname, 'public', name);
   if (fs.existsSync(pubFile) && fs.statSync(pubFile).isFile()) return pubFile;
+  const rootFile = path.join(__dirname, name);
+  if (fs.existsSync(rootFile) && fs.statSync(rootFile).isFile()) return rootFile;
   return null;
 }
 
