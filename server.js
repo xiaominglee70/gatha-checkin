@@ -1079,10 +1079,10 @@ async function seed() {
     try { await pool.query('ALTER TABLE checkins ADD COLUMN IF NOT EXISTS title TEXT'); }
     catch (e) { console.log('[Seed] checkins.title 迁移:', e.message); }
 
-    // 迁移：善叙述只保留最新版本（把历史多版本收拢为最后一条）
+    // 迁移：善叙述只保留最新版本（把历史多版本收拢为最后一条；jsonb 数组用负索引取末位）
     try {
       await pool.query(
-        `UPDATE gooddeeds SET versions = jsonb_build_array(versions[array_length(versions, 1)])
+        `UPDATE gooddeeds SET versions = jsonb_build_array(versions->-1)
          WHERE jsonb_array_length(versions) > 1`
       );
     } catch (e) { console.log('[Seed] gooddeeds 版本收拢:', e.message); }
