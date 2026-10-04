@@ -650,10 +650,9 @@ route('PUT', '/api/gooddeeds/:id', async (req, res) => {
   if (!content) return err(res, 400, '内容不能为空');
 
   // gooddeeds 表没有 content 列，内容保存在 versions（JSONB 数组）里；
-  // 编辑时在历史版本后追加新版本，保留版本记录
-  const prevVersions = Array.isArray(gd.versions) ? gd.versions : [];
+  // 按用户要求只保留最新版本：编辑后 versions 只存当前这一版，不再累积历史版本
   const updates = {
-    versions: [...prevVersions, { content, updated_at: nowIso() }],
+    versions: [{ content, updated_at: nowIso() }],
     updated_at: nowIso(),
   };
   await updateRow('gooddeeds', updates, 'id', gd.id);
@@ -1079,6 +1078,14 @@ async function seed() {
     // 迁移：打卡记录增加 title 列（打卡时快照当天安排题目，安排被覆盖后历史标题仍可显示）
     try { await pool.query('ALTER TABLE checkins ADD COLUMN IF NOT EXISTS title TEXT'); }
     catch (e) { console.log('[Seed] checkins.title 迁移:', e.message); }
+
+    // 迁移：善叙述只保留最新版本（把历史多版本收拢为最后一条）
+    try {
+      await pool.query(
+        `UPDATE gooddeeds SET versions = jsonb_build_array(versions[array_length(versions, 1)])
+         WHERE jsonb_array_length(versions) > 1`
+      );
+    } catch (e) { console.log('[Seed] gooddeeds 版本收拢:', e.message); }
 
     const userCount = await countTable('users');
     if (userCount === 0) {
