@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 // ============================================================
 // 偈语背诵打卡 · 前端逻辑（单页应用）
 // 双通道：Telegram 内打开 → initData 自动识别；浏览器打开 → 用户名登录
@@ -18,6 +18,13 @@ const state = {
   pendingTeachingTitle: null
 };
 
+// ---------------- 全局字体：善叙述与反馈统一 仿宋 小四（16px） ----------------
+(function () {
+  const st = document.createElement('style');
+  st.textContent = ".body,.ver-item,.fb-item,.gd-content,.fb-content,textarea{font-family:'仿宋','FangSong','STFangsong','FangSong_GB2312',serif !important;font-size:16px !important;line-height:1.8 !important;}";
+  document.head.appendChild(st);
+})();
+
 // ---------------- 工具 ----------------
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -28,7 +35,12 @@ function fmtTime(iso) {
   const p = n => String(n).padStart(2, '0');
   return `${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function fmtDate(s) { return s || '—'; }
+function fmtDate(s) {
+  if (!s) return '—';
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日';
+  return s;
+}
 function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(() => fn.apply(null, arguments), ms); }; }
 let toastTimer = null;
 function toast(msg) {
@@ -162,9 +174,9 @@ async function renderHome(c) {
         ${homeData.daily ? `
           <details style="margin-top:4px">
             <summary style="font-size:16px;font-weight:700;cursor:pointer;list-style:none">📖 ${esc(homeData.daily.title || '(今日内容)')} <span style="font-size:12px;color:#666">（点开展开）</span></summary>
-            <div style="margin-top:10px;line-height:1.6;padding:10px;background:#f8f9fa;border-radius:8px">${esc(homeData.daily.content || '')}</div>
+            <div style="margin-top:10px;line-height:1.6;padding:10px;background:#f8f9fa;border-radius:8px;white-space:pre-wrap">${esc(homeData.daily.content || '').replace(/\n/g, '<br>')}</div>
           </details>
-          <div class="src" style="margin-top:8px;font-size:12px">${homeData.daily.source ? esc(homeData.daily.source) : ''}${homeData.daily.fileName ? ' · <a href="/uploads/' + encodeURIComponent(homeData.daily.fileName) + '" target="_blank">附件</a>' : ''}</div>` : '<div class="empty">还没有偈语/开示，等管理员发布</div>'}
+          <div class="src" style="margin-top:8px;font-size:12px">${homeData.daily.source ? esc(homeData.daily.source) : ''}${homeData.daily.fileName ? ' · <a href="/uploads/' + encodeURIComponent(homeData.daily.fileName) + '" target="_blank">附件</a>' : ''}</div>` : '<div class="empty">今日无安排</div>'}
       </div>
       <div class="card" style="padding:24px">
         <h3 style="font-size:18px">今日打卡</h3>
@@ -183,8 +195,8 @@ async function renderHome(c) {
           <div class="roster-row">
             <span class="dot ${r.done ? 'done' : 'pending'}"></span>
             <span class="roster-name" style="flex:2">${esc(r.user.username)}${r.user.role === 'admin' ? '（管理员）' : ''}</span>
-            <span class="roster-title">${homeData.daily ? esc(homeData.daily.title || '(无标题)') : '—'}</span>
-            <span class="roster-time">${r.done ? fmtTime(r.lastAt) : '未打卡'}</span>
+            <span class="roster-title">${homeData.daily ? esc(r.lastTitle || homeData.daily.title || '(无标题)') : '—'}</span>
+            <span class="roster-time">${r.done ? fmtTime(r.lastAt) : '未打卡 · ' + fmtDate(homeData.today.date)}</span>
           </div>`).join('')}
         ${undone.length ? `<div class="muted" style="margin-top:10px;font-size:12px">还差：${undone.map(r => esc(r.user.username)).join('、')}</div>` : ''}
       </div>
@@ -207,43 +219,65 @@ window.doCheckin = doCheckin;
 async function renderTeachings(c) {
   c.innerHTML = `
     <div class="card">
+      <div class="muted small" style="margin-bottom:6px">一共有 <b id="tg-total">…</b> 条${state.tgType === '开示' ? '开示' : '偈语'}</div>
       <div class="field"><input id="tg-search" type="text" placeholder="搜索${state.tgType === '开示' ? '开示' : '偈语'}…" value="${esc(state.q || '')}"></div>
     </div>
     <div id="tg-list"><div class="empty">加载中…</div></div>`;
+  const cyclesData = await api('/api/cycles');
+  const loadList = async () => {
+    const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
+    const tt = document.getElementById('tg-total');
+    if (tt) tt.textContent = d.total || 0;
+    renderTeachingList(d.teachings, cyclesData.cycles || []);
+  };
   document.getElementById('tg-search').addEventListener('input', debounce(async () => {
     state.q = document.getElementById('tg-search').value.trim();
-    const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
-    renderTeachingList(d.teachings);
+    loadList();
   }, 300));
-  const d = await api('/api/teachings?type=' + encodeURIComponent(state.tgType) + '&q=' + encodeURIComponent(state.q || ''));
-  renderTeachingList(d.teachings);
+  loadList();
 }
 
 function tgTabSwitch(t) { state.tgType = t; state.q = ''; state.picks = []; renderView(); }
 window.tgTabSwitch = tgTabSwitch;
 
-function renderTeachingList(list) {
+function renderTeachingList(list, cycles) {
   const box = document.getElementById('tg-list');
   if (!list.length) { box.innerHTML = '<div class="empty">这个库里还没有内容</div>'; return; }
+  // 每条内容所在进行中周期的日期区间（只取日期，去掉时间）
+  const day = s => String(s || '').slice(0, 10);
+  const rangeById = {};
+  window.cycleIdByTeaching = {};
+  (cycles || []).forEach(cy => {
+    if (cy.status !== 'active') return;
+    const s = day(cy.startDate);
+    const e = cy.endDate ? day(cy.endDate) : '';
+    (cy.teachingIds || []).forEach(tid => {
+      if (!rangeById[tid]) {
+        rangeById[tid] = e ? (s === e ? s : (s + ' ~ ' + e)) : (s + ' ~ 长期');
+        window.cycleIdByTeaching[tid] = cy.id;
+      }
+    });
+  });
   box.innerHTML = `
     <div class="section-title">${state.tgType === '开示' ? '开示' : '偈语'}（${list.length}）</div>
     <div class="card"><div class="section-title" style="margin:0 0 6px">选择内容开始背诵周期</div>
       <div class="checkbox-list" id="cycle-pick">
-        ${list.map(t => `<label><input type="checkbox" value="${t.id}"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(t.scheduledDate) + '）' : ''}</span></label>`).join('')}
+        ${list.map(t => `<label><input type="checkbox" value="${t.id}" onchange="togglePickFromCheckbox('${t.id}', this.checked)"><span>${esc(t.type)} · ${esc(t.title || '(无标题)')}${t.scheduledDate ? '（' + esc(day(t.scheduledDate)) + '）' : ''}</span><span class="pick-preview" id="preview-${t.id}" style="display:none"></span><button type="button" class="btn small danger undo-btn" id="undo-${t.id}" style="${isPicked(t.id) ? '' : 'display:none'}" onclick="unpickTeaching(event, '${t.id}')">撤销</button></label>`).join('')}
       </div>
       <div class="form-actions" style="margin-top:10px">
-        <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px">
+        <input id="cycle-days" type="number" min="1" max="365" placeholder="天数（留空=长期）" style="padding:8px;border:1px solid #9ab0c8;border-radius:8px;font-family:inherit;font-size:13px;width:140px" oninput="updatePreview()">
         <button class="btn primary" onclick="startCycle()">开始新周期</button>
       </div>
     </div>
     ${list.map(t => `
       <div class="item">
         <div class="head"><span class="title">${esc(t.type)} · ${esc(t.title || '(无标题)')}</span></div>
-        <div class="meta">${t.scheduledDate ? '发布安排：' + esc(t.scheduledDate) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}</div>
+        <div class="meta">${rangeById[t.id] ? '周期：' + esc(rangeById[t.id]) + '　' : ''}${!rangeById[t.id] && t.scheduledDate ? '发布安排：' + esc(day(t.scheduledDate)) + '　' : ''}${t.source ? '来源：' + esc(t.source) + '　' : ''}${t.fileName ? '<a href="/uploads/' + encodeURIComponent(t.fileName) + '" target="_blank">附件</a>' : ''}${rangeById[t.id] && state.user && state.user.role === 'admin' ? '<button class="btn small danger" style="margin-left:6px" onclick="deleteCycleForTeaching(\'' + t.id + '\')">撤销安排</button>' : ''}</div>
         <div class="body">${esc(t.content)}</div>
         <div class="actions">
-          <button class="btn small ghost" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
+          <button class="btn small ghost" data-pick="${t.id}" onclick="togglePick(this, '${t.id}')">${isPicked(t.id) ? '✓ 已选' : '加入周期'}</button>
           <button class="btn small primary" onclick="writeGooddeedFromTeaching('${t.id}','${esc(t.title || '(无标题)').replace(/'/g, "\\'")}','${esc(t.type)}')">写善叙述</button>
+          <button class="btn small ghost" onclick="downloadTeaching('${t.id}')">下载</button>
           ${state.user && state.user.role === 'admin' ? `
             <button class="btn small ghost" onclick="editTeachingById('${t.id}')">修改</button>
             <button class="btn small danger" onclick="delTeaching('${t.id}')">删除</button>` : ''}
@@ -262,15 +296,81 @@ function renderTeachingList(list) {
 function isPicked(id) { return state.picks && state.picks.includes(id); }
 
 function togglePick(btn, id) {
+  const picked = btn.textContent !== '✓ 已选';
   state.picks = state.picks || [];
   const i = state.picks.indexOf(id);
-  if (i >= 0) { state.picks.splice(i, 1); btn.textContent = '加入周期'; }
-  else { state.picks.push(id); btn.textContent = '✓ 已选'; }
-  // 同步勾选框
-  const cb = document.querySelector(`#cycle-pick input[value="${id}"]`);
-  if (cb) cb.checked = i < 0;
+  if (picked && i < 0) state.picks.push(id);
+  if (!picked && i >= 0) state.picks.splice(i, 1);
+  updatePickUI(id, picked);
 }
 window.togglePick = togglePick;
+
+// 复选框勾选/取消：同步选择状态
+function togglePickFromCheckbox(id, checked) {
+  state.picks = state.picks || [];
+  const i = state.picks.indexOf(id);
+  if (checked && i < 0) state.picks.push(id);
+  if (!checked && i >= 0) state.picks.splice(i, 1);
+  updatePickUI(id, checked);
+}
+window.togglePickFromCheckbox = togglePickFromCheckbox;
+
+// 撤销选择：若该条已在进行中的周期内，则真正撤销安排（删除周期）；否则仅取消勾选
+function unpickTeaching(ev, id) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (window.cycleIdByTeaching && window.cycleIdByTeaching[id]) {
+    deleteCycleForTeaching(id);
+    return;
+  }
+  togglePickFromCheckbox(id, false);
+}
+window.unpickTeaching = unpickTeaching;
+
+// 同步勾选框、撤销按钮、条目标题按钮、预览四处状态
+function updatePickUI(id, picked) {
+  const cb = document.querySelector(`#cycle-pick input[value="${id}"]`);
+  if (cb) cb.checked = picked;
+  const undo = document.getElementById('undo-' + id);
+  if (undo) undo.style.display = picked ? 'inline-block' : 'none';
+  const pb = document.querySelector(`#tg-list .item .actions button[data-pick="${id}"]`);
+  if (pb) pb.textContent = picked ? '✓ 已选' : '加入周期';
+  const pv = document.getElementById('preview-' + id);
+  if (pv) {
+    if (picked) updatePreview();
+    else { pv.style.display = 'none'; pv.textContent = ''; }
+  }
+}
+
+// 预览：根据天数显示将安排的日期（1 天=当天，多天=开始~结束，留空=长期）
+function updatePreview() {
+  const daysSel = document.getElementById('cycle-days');
+  const days = daysSel ? parseInt(daysSel.value, 10) : NaN;
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const start = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
+  let end = start;
+  if (!isNaN(days) && days > 1) {
+    const d = new Date(); d.setDate(d.getDate() + days - 1);
+    end = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  }
+  const text = (!isNaN(days) && days > 0) ? (days === 1 ? start : (start + ' ~ ' + end)) : (start + ' ~ 长期');
+  (state.picks || []).forEach(id => {
+    const el = document.getElementById('preview-' + id);
+    if (el) { el.textContent = ' 将安排：' + text; el.style.display = 'inline'; }
+  });
+}
+
+// 撤销安排：删除包含该内容的活动周期（管理员用）
+async function deleteCycleForTeaching(tid) {
+  if (!confirm('撤销安排会删除该内容所在的整个背诵周期，且首页不再显示。确定吗？')) return;
+  try {
+    await api('/api/cycles/by-teaching/' + encodeURIComponent(tid), { method: 'DELETE' });
+    toast('已撤销安排');
+    renderView();
+  } catch (e) { toast(e.message); }
+}
+window.deleteCycleForTeaching = deleteCycleForTeaching;
 
 async function startCycle() {
   state.picks = state.picks || [];
@@ -284,7 +384,7 @@ async function startCycle() {
     await api('/api/cycles', { method: 'POST', body: JSON.stringify({ teachingIds: final, days: days || undefined }) });
     state.picks = [];
     toast(days ? `新背诵周期已开始（${days} 天）` : '新背诵周期已开始（长期）');
-    switchView('mine');
+    renderView();
   } catch (e) { toast(e.message); }
 }
 window.startCycle = startCycle;
@@ -348,30 +448,36 @@ async function renderGooddeeds(c) {
   const myNewest = mine.gooddeeds.length ? mine.gooddeeds[0] : null;
   c.innerHTML = `
     <div class="card gd-box">
-      <h3>我的善叙述 ${myNewest ? '<span style="font-size:12px;color:#888;font-weight:normal">（' + fmtTime(myNewest.updatedAt) + '）</span>' : ''}</h3>
+      <h3>写善叙述</h3>
       ${state.pendingTeachingId ? `
         <div style="background:#e8f0f8;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:14px;color:#1f4a6a">
           正在为 <b>${esc(state.pendingTeachingType)}《${esc(state.pendingTeachingTitle)}》</b> 写善叙述
           <button class="btn small ghost" style="margin-left:8px" onclick="cancelPendingTeaching()">取消关联</button>
         </div>` : ''}
-      ${myNewest ? `
-        <div style="font-size:16px;font-weight:700;margin-bottom:6px">${myNewest.title ? '《' + esc(myNewest.title) + '》' : ''}</div>
-        <div style="margin-bottom:8px">${retentionHint(myNewest)}</div>
-        <div class="body" style="margin-bottom:8px">${esc(myNewest.content)}</div>
-        ${renderAtts(myNewest.attachments, true, myNewest.id)}
-        <div class="form-actions" style="margin-top:10px">
-          <button class="btn small ghost" onclick="openEditGooddeed('${myNewest.id}','${esc(myNewest.content)}',${myNewest.updateLeft})">编辑</button>
-          <button class="btn small danger" onclick="delGooddeed('${myNewest.id}')">删除</button>
-          <button class="btn small ghost" onclick="showGooddeedDetail('${myNewest.id}')">查看反馈</button>
-          <button class="btn small ghost" onclick="downloadGooddeed('${myNewest.id}', '${esc(myNewest.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}', '${esc(state.user.username)}')">下载到本地</button>
-        </div>` : '<div class="small">今天还没写善叙述</div>'}
-      <div class="field" style="margin-top:12px"><label>题目</label><input id="gd-title" type="text" placeholder="给你的善叙述起个题目…"></div>
+      <div class="field"><label>题目</label><input id="gd-title" type="text" placeholder="给你的善叙述起个题目…"></div>
       <div class="field"><label>字数不限</label><textarea id="gd-new" placeholder=""></textarea></div>
       <div class="field"><label>文档附件（PDF / Word，可选，单文件 ≤ 8MB）</label><input id="gd-files" type="file" accept=".pdf,.doc,.docx" multiple></div>
       <div class="att-file-hint" id="gd-file-preview"></div>
       <div class="form-actions" style="margin-top:8px"><button class="btn primary" onclick="submitGooddeed()">递交</button></div>
     </div>
+    <div class="card gd-box">
+      <h3>我的善叙述（${mine.gooddeeds.length} 条）</h3>
+      ${mine.gooddeeds.length ? mine.gooddeeds.map((g, i) => `
+        <div class="item gd-box" style="border-top:1px solid #e5edf5;padding-top:10px">
+          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : ''}</span><span class="meta">${fmtTime(g.updatedAt)} · ${g.versionCount} 版</span></div>
+          <div style="margin-bottom:6px">${retentionHint(g)}</div>
+          <div class="body" style="margin-bottom:6px">${esc(g.content)}</div>
+          ${renderAtts(g.attachments, true, g.id)}
+          <div class="actions">
+            <button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}',${g.updateLeft})">编辑</button>
+            <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
+            <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
+            <button class="btn small ghost" onclick="downloadGooddeed('${g.id}', '${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}', '${esc(state.user.username)}')">下载到本地</button>
+          </div>
+        </div>`).join('') : '<div class="small">今天还没写善叙述</div>'}
+    </div>
     <div id="gd-list"></div>`;
+
   const fileInput = document.getElementById('gd-files');
   if (fileInput) fileInput.addEventListener('change', () => {
     const names = Array.from(fileInput.files || []).map(f => f.name).join('、');
@@ -386,8 +492,9 @@ async function renderGooddeeds(c) {
       <div class="body">${esc(g.content)}</div>
       ${renderAtts(g.attachments, false, g.id)}
       <div class="actions">
-        <button class="btn small danger" onclick="delGooddeed('${myNewest.id}')">删除</button>
-          <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈（${g.feedbackCount}）</button>
+        ${g.author.id === state.user.id ? `<button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button>` : ''}
+        ${(g.author.id === state.user.id || state.user.role === 'admin') ? `<button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>` : ''}
+        <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈（${g.feedbackCount}）</button>
       </div>
       <div class="field" style="margin-top:8px"><textarea id="fb-gooddeed-${g.id}" placeholder="写下你的反馈或建议（字数不限）…" style="min-height:80px"></textarea></div>
       <div class="form-actions"><button class="btn small primary" onclick="submitFeedback('gooddeed','${g.id}')">提交反馈</button></div>
@@ -443,24 +550,48 @@ function downloadGooddeed(id, content, username) {
   toast('已下载到本地');
 }
 window.downloadGooddeed = downloadGooddeed;
+// 下载偈语/开示内容到本地
+async function downloadTeaching(id) {
+  const d = await api('/api/teachings');
+  const t = d.teachings.find(x => x.id === id);
+  if (!t) { toast('内容不存在'); return; }
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const dateStr = `${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}`;
+  const header = `${t.type} · ${t.title || '(无标题)'}\n${t.source ? '来源：' + t.source + '\n' : ''}${'='.repeat(40)}\n\n`;
+  const blob = new Blob([header + t.content], { type: 'application/msword' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${t.type}_${t.title || '内容'}_${dateStr}.doc`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  toast('已下载到本地');
+}
+window.downloadTeaching = downloadTeaching;
 
-async function openEditGooddeed(id, content, left) {
+async function openEditGooddeed(id, content) {
   const detail = await api('/api/gooddeeds/' + id);
   const atts = detail.gooddeed.attachments || [];
-  const area = document.createElement('div');
-  area.className = 'card gd-box gd-edit-area';
-  area.innerHTML = `
-    <h3>编辑善叙述</h3>
-    <div class="field"><textarea id="gd-edit">${esc(content)}</textarea></div>
-    ${renderAtts(atts, true, id)}
-    <div class="field"><label>添加文档附件（PDF / Word，可选）</label><input id="gd-add-file-${id}" type="file" accept=".pdf,.doc,.docx" multiple></div>
-    <div class="form-actions">
-      <button class="btn primary small" onclick="saveEditGooddeed('${id}')">保存</button>
-      <button class="btn ghost small" onclick="this.closest('.card').remove()">取消</button>
-      <button class="btn small ghost" onclick="uploadGooddeedAtt('${id}')">上传附件</button>
+  const layer = document.createElement('div');
+  layer.id = 'gd-edit-layer';
+  layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
+    <div id="gd-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51;background:#fff;border-radius:12px;padding:16px">
+      <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;margin:-16px -16px 8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('gd-edit-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('gd-edit-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#gd-edit-layer').remove()">✕</button></div>
+      <h3 style="margin-top:8px">编辑善叙述</h3>
+      <div class="field"><textarea id="gd-edit" style="min-height:120px">${esc(content)}</textarea></div>
+      ${renderAtts(atts, true, id)}
+      <div class="field"><label>添加文档附件（PDF / Word，可选）</label><input id="gd-add-file-${id}" type="file" accept=".pdf,.doc,.docx" multiple></div>
+      <div class="form-actions">
+        <button class="btn primary small" onclick="saveEditGooddeed('${id}')">保存</button>
+        <button class="btn ghost small" onclick="this.closest('#gd-edit-layer').remove()">取消</button>
+        <button class="btn small ghost" onclick="uploadGooddeedAtt('${id}')">上传附件</button>
+      </div>
     </div>`;
-  document.querySelector('.gd-box').insertAdjacentElement('afterend', area);
-  document.getElementById('gd-edit').focus();
+  document.body.appendChild(layer);
+  const ta = document.getElementById('gd-edit');
+  if (ta) ta.focus();
 }
 window.openEditGooddeed = openEditGooddeed;
 
@@ -472,6 +603,8 @@ async function uploadGooddeedAtt(id) {
       await api('/api/gooddeeds/' + id + '/attachments', { method: 'POST', body: JSON.stringify({ name: f.name, data: await readFileBase64(f) }) });
     }
     toast('附件已上传（不占用更新次数）');
+    const el = document.getElementById('gd-edit-layer');
+    if (el) el.remove();
     renderView();
   } catch (e) { toast(e.message); }
 }
@@ -479,7 +612,7 @@ window.uploadGooddeedAtt = uploadGooddeedAtt;
 
 async function delGooddeedAtt(id, attId) {
   if (!confirm('删除该附件？')) return;
-  try { await api('/api/gooddeeds/' + id + '/attachments/' + attId, { method: 'DELETE' }); toast('已删除'); renderView(); }
+  try { await api('/api/gooddeeds/' + id + '/attachments/' + attId, { method: 'DELETE' }); toast('已删除'); const el = document.getElementById('gd-edit-layer'); if (el) el.remove(); renderView(); }
   catch (e) { toast(e.message); }
 }
 window.delGooddeedAtt = delGooddeedAtt;
@@ -506,26 +639,86 @@ async function delFeedback(id) {
 }
 window.delFeedback = delFeedback;
 
-// 编辑反馈
+// 反馈操作守卫：他人反馈禁止改动，点击弹提示
+function fbGuard(mine, fn) {
+  if (!mine) { toast('禁止改动他人的反馈！'); return; }
+  fn();
+}
+window.fbGuard = fbGuard;
+
+// 弹窗整体缩放：− / ＋ 步进放大，整个窗口所有内容（含小字）等比放大；
+// 基础宽高按比例缩小，保证放大后视觉尺寸基本不超屏；还原彻底清除缩放
+function zoomLayer(boxId, dir) {
+  const el = document.getElementById(boxId);
+  if (!el) return;
+  if (dir === 0) {
+    el.style.cssText = '';
+    const r = el.querySelector('input[type=range]');
+    if (r) r.value = 1;
+    return;
+  }
+  const cur = parseFloat(el.style.zoom) || 1;
+  let next = Math.round((cur + dir * 0.1) * 10) / 10;
+  next = Math.max(0.8, Math.min(1.5, next));
+  el.style.zoom = next;
+  el.style.width = Math.round(90 / next) + 'vw';
+  el.style.maxHeight = Math.round(80 / next) + 'vh';
+}
+window.zoomLayer = zoomLayer;
+
+// 滑块控制缩放（0.8~1.5，拖动即缩放整个窗口，手指友好）
+function zoomLayerRange(boxId, val) {
+  const el = document.getElementById(boxId);
+  if (!el) return;
+  let z = Math.round(parseFloat(val) * 10) / 10;
+  z = Math.max(0.8, Math.min(1.5, z));
+  el.style.zoom = z;
+  el.style.width = Math.round(90 / z) + 'vw';
+  el.style.maxHeight = Math.round(80 / z) + 'vh';
+}
+window.zoomLayerRange = zoomLayerRange;
+
+// 编辑反馈（自定义弹窗，可缩放）
 async function editFeedback(id, oldContent) {
-  const newContent = prompt('修改反馈：', oldContent);
-  if (newContent === null) return;
-  const trimmed = newContent.trim();
-  if (!trimmed) { toast('内容不能为空'); return; }
+  const layer = document.createElement('div');
+  layer.id = 'fb-edit-layer';
+  layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60" onclick="this.parentElement.remove()"></div>
+    <div id="fb-edit-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:61;background:#fff;border-radius:12px;padding:16px">
+      <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;margin:-16px -16px 8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee;border-radius:12px 12px 0 0"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('fb-edit-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('fb-edit-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#fb-edit-layer').remove()">✕</button></div>
+      <h3 style="margin-top:8px">修改反馈</h3>
+      <div class="field"><textarea id="fb-edit" style="min-height:120px">${esc(oldContent)}</textarea></div>
+      <div class="form-actions">
+        <button class="btn primary small" onclick="saveEditFeedback('${id}')">保存</button>
+        <button class="btn ghost small" onclick="this.closest('#fb-edit-layer').remove()">取消</button>
+      </div>
+    </div>`;
+  document.body.appendChild(layer);
+  const ta = document.getElementById('fb-edit');
+  if (ta) ta.focus();
+}
+window.editFeedback = editFeedback;
+
+async function saveEditFeedback(id) {
+  const content = document.getElementById('fb-edit').value.trim();
+  if (!content) { toast('内容不能为空'); return; }
   try {
-    await api('/api/feedback/' + id, { method: 'PUT', body: JSON.stringify({ content: trimmed }) });
+    await api('/api/feedback/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
+    const layer = document.getElementById('fb-edit-layer');
+    if (layer) layer.remove();
     toast('反馈已修改');
     renderView();
   } catch (e) { toast(e.message); }
 }
-window.editFeedback = editFeedback;
+window.saveEditFeedback = saveEditFeedback;
 
 async function saveEditGooddeed(id) {
   const content = document.getElementById('gd-edit').value.trim();
   if (!content) { toast('内容不能为空'); return; }
   try {
-    const d = await api('/api/gooddeeds/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
-    toast(`已保存`);
+    await api('/api/gooddeeds/' + id, { method: 'PUT', body: JSON.stringify({ content }) });
+    const layer = document.getElementById('gd-edit-layer');
+    if (layer) layer.remove();
+    toast('已保存');
     renderView();
   } catch (e) { toast(e.message); }
 }
@@ -542,21 +735,64 @@ async function showGooddeedDetail(id) {
         ${renderAtts(gd.attachments, false, id)}
         <div class="ver-list">${gd.versions.map((v, i) => `<div class="ver-item">版本 ${i + 1}（${fmtTime(v.updatedAt)}）：${esc(v.content)}</div>`).join('')}</div>
         <div class="section-title" style="margin-top:10px">反馈（${d.feedback.length}）</div>
-        ${d.feedback.length ? d.feedback.map(f => `<div class="fb-item"><span class="who">${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span></div>`).join('') : '<div class="muted small">暂无反馈</div>'}
+        ${d.feedback.length ? d.feedback.map((f, i) => { const mine = f.authorId === state.user.id; return `<div class="fb-item"><span class="who">反馈${i + 1}，${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span> <button class="btn small ghost" style="${mine ? '' : 'opacity:.45'}" onclick="fbGuard(${mine}, () => editFeedback('${f.id}','${esc(f.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}'))">编辑</button> <button class="btn small danger" style="${mine ? '' : 'opacity:.45'}" onclick="fbGuard(${mine}, () => delFeedback('${f.id}'))">删除</button></div>`; }).join('') : '<div class="muted small">暂无反馈</div>'}
       </div>`;
     const layer = document.createElement('div');
     layer.id = 'detail-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);max-height:80vh;overflow:auto;z-index:51">${html}</div>`;
+      <div id="detail-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('detail-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('detail-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#detail-layer').remove()">✕</button></div>
+        ${html}
+      </div>`;
     document.body.appendChild(layer);
   } catch (e) { toast(e.message); }
 }
 window.showGooddeedDetail = showGooddeedDetail;
 
+// 题目映射：安排日期 -> 偈语/开示题目；周期题目：当天处于进行中周期内时延续显示
+async function buildScheduleMap() {
+  const [teachings, cycles] = await Promise.all([
+    api('/api/teachings'),
+    api('/api/cycles')
+  ]);
+  const titleByDate = {};
+  (teachings.teachings || []).forEach(t => {
+    if (t.scheduledDate && !titleByDate[t.scheduledDate]) titleByDate[t.scheduledDate] = t.title || '(无标题)';
+  });
+  const dayKey = d => String(d).slice(0, 10);
+  const activeCycles = (cycles.cycles || []).filter(cy => cy.status === 'active');
+  function cycleTitle(d) {
+    for (const cy of activeCycles) {
+      const s = dayKey(cy.startDate);
+      const e = cy.endDate ? dayKey(cy.endDate) : null;
+      if (d >= s && (!e || d <= e)) {
+        const t = (cy.teachings || []).find(x => x && x.title);
+        if (t) return t.title;
+      }
+    }
+    return '';
+  }
+  return { titleByDate, cycleTitle };
+}
+
 // ================= 我的 =================
 async function renderMine(c) {
   c.innerHTML = '<div class="empty">加载中…</div>';
-  const [cycles, checkins] = await Promise.all([api('/api/cycles'), api('/api/checkins/mine')]);
+  const [checkins, mine] = await Promise.all([
+    api('/api/checkins/mine'),
+    api('/api/gooddeeds/mine')
+  ]);
+  // 按日期统计打卡次数
+  const byDate = {};
+  const titleByCk = {};
+  (checkins.checkins || []).forEach(ck => {
+    byDate[ck.date] = (byDate[ck.date] || 0) + 1;
+    if (ck.title && !titleByCk[ck.date]) titleByCk[ck.date] = ck.title;
+  });
+  // 题目索引：安排日期 -> 偈语/开示题目；周期题目：当天处于进行中周期内时延续显示
+  const { titleByDate, cycleTitle } = await buildScheduleMap();
+  const dates = Object.keys(byDate).sort().reverse();
+  const gdList = mine.gooddeeds || [];
   c.innerHTML = `
     <div class="card">
       <h3>我的账号</h3>
@@ -567,22 +803,20 @@ async function renderMine(c) {
       </div>
     </div>
     <div class="card">
-      <h3>背诵周期</h3>
-      ${cycles.cycles.length ? cycles.cycles.map(cy => `
-        <div class="item">
-          <div class="head"><span class="title">${esc(cy.title)}</span><span class="meta">${cy.status === 'active' ? '进行中' : '已归档'} · 开始 ${fmtDate(cy.startDate)}${cy.endDate ? ' · 至 ' + fmtDate(cy.endDate) : ''}</span></div>
-          <div class="meta">包含：${cy.teachings.map(t => `${esc(t.type)}${t.title ? '《' + esc(t.title) + '》' : ''}`).join('、')}</div>
-        </div>`).join('') : '<div class="empty">还没有背诵周期，去偈语库选择内容开始吧</div>'}
-      <div class="form-actions" style="margin-top:8px"><button class="btn primary" onclick="switchView('teachings')">选择内容 · 开始新周期</button></div>
-    </div>
-    <div class="card">
-      <h3>我的打卡记录（${checkins.checkins.length} 条）</h3>
-      ${checkins.checkins.length ? checkins.checkins.map(ck => `
+      <h3>打卡记录（${dates.length} 天）</h3>
+      ${dates.length ? dates.map(d => `
         <div class="roster-row">
           <span class="dot done"></span>
-          <span class="roster-name">${fmtDate(ck.date)} ${ck.note ? '· ' + esc(ck.note) : ''}</span>
-          <span class="muted">${fmtTime(ck.createdAt)}</span>
+          <span class="roster-name">${esc(state.user.username)} · ${esc(titleByCk[d] || titleByDate[d] || cycleTitle(d) || '（当日无安排）')} · ${fmtDate(d)} · ${byDate[d]} 次</span>
         </div>`).join('') : '<div class="empty">还没有打卡记录</div>'}
+    </div>
+    <div class="card">
+      <h3>善叙述（${gdList.length} 条）</h3>
+      ${gdList.length ? gdList.map((g, i) => `
+        <div class="item">
+          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : '（未命名）'}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
+          <div class="muted small" style="margin-top:2px">反馈 ${g.feedbackCount || 0} 条${g.teaching ? ' · 针对《' + esc(g.teaching.title) + '》' : ''}</div>
+        </div>`).join('') : '<div class="empty">还没有善叙述</div>'}
     </div>`;
 }
 
@@ -620,7 +854,10 @@ async function viewFeedback(type, id) {
     const layer = document.createElement('div');
     layer.id = 'fb-layer';
     layer.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50" onclick="this.parentElement.remove()"></div>
-      <div style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);z-index:51">${html}</div>`;
+      <div id="fb-box" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:92vw;max-width:560px;max-height:80vh;overflow:auto;z-index:51">
+        <div style="position:sticky;top:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.95);border-bottom:1px solid #eee"><input type="range" min="0.8" max="1.5" step="0.1" value="1" style="flex:1;height:28px" oninput="zoomLayerRange('fb-box', this.value)"><button class="btn small ghost" style="min-width:44px" onclick="zoomLayer('fb-box',0)">还原</button><button class="btn small ghost" style="min-width:44px" onclick="this.closest('#fb-layer').remove()">✕</button></div>
+        ${html}
+      </div>`;
     document.body.appendChild(layer);
   } catch (e) { toast(e.message); }
 }
@@ -637,6 +874,7 @@ window.popSubmit = popSubmit;
 
 // ================= 管理 =================
 let adminTab = 'teachings';
+let adminSubTab = '偈语';
 function renderAdmin(c) {
   c = c || document.getElementById('content');
   c.innerHTML = `
@@ -644,12 +882,15 @@ function renderAdmin(c) {
       <button class="${adminTab === 'teachings' ? 'active' : ''}" onclick="adminTabSwitch('teachings')">内容管理</button>
       <button class="${adminTab === 'users' ? 'active' : ''}" onclick="adminTabSwitch('users')">成员</button>
       <button class="${adminTab === 'checkins' ? 'active' : ''}" onclick="adminTabSwitch('checkins')">打卡内容</button>
+      <button class="${adminTab === 'gooddeeds' ? 'active' : ''}" onclick="adminTabSwitch('gooddeeds')">善叙述</button>
+      <button class="${adminTab === 'feedback' ? 'active' : ''}" onclick="adminTabSwitch('feedback')">反馈</button>
       <button class="${adminTab === 'settings' ? 'active' : ''}" onclick="adminTabSwitch('settings')">设置</button>
     </div>
     <div id="admin-body"><div class="empty">加载中…</div></div>`;
   renderAdminBody();
 }
 window.adminTabSwitch = function (t) { adminTab = t; renderAdmin(document.getElementById('content')); };
+window.adminSubSwitch = function (t) { adminSubTab = t; renderAdminBody(); };
 
 async function renderAdminBody() {
   const box = document.getElementById('admin-body');
@@ -673,10 +914,14 @@ async function renderAdminBody() {
             </div>
           </div>
         </div>
-        <div class="section-title">内容列表（${d.teachings.length}）</div>
-        ${d.teachings.map(t => `
+        <div class="tabs" style="margin:12px 0 0">
+          <button class="${adminSubTab === '偈语' ? 'active' : ''}" onclick="adminSubSwitch('偈语')">偈语</button>
+          <button class="${adminSubTab === '开示' ? 'active' : ''}" onclick="adminSubSwitch('开示')">开示</button>
+        </div>
+        <div class="section-title">${adminSubTab}列表（${d.teachings.filter(t => t.type === adminSubTab).length}）</div>
+        ${d.teachings.filter(t => t.type === adminSubTab).map(t => `
           <div class="item">
-            <div class="head"><span class="title">${esc(t.type)} · ${esc(t.title || '(无标题)')}</span><span class="meta">${t.type}</span></div>
+            <div class="head"><span class="title">${esc(t.title || '(无标题)')}</span><span class="meta">${t.type}</span></div>
             <div class="body">${esc(t.content)}</div>
             <div class="actions">
               <button class="btn small ghost" onclick="editTeachingById('${t.id}')">编辑</button>
@@ -728,15 +973,59 @@ async function renderAdminBody() {
         </div>`;
     } else if (adminTab === 'checkins') {
       const d = await api('/api/admin/checkins');
+      const sch = await buildScheduleMap();
+      // 按 人名+日期 聚合：显示 人名 · 标题 · 某年某月某日 · 次数
+      const agg = {};
+      (d.checkins || []).forEach(ck => {
+        const k = (ck.username || '(已移除)') + '|' + ck.date;
+        if (!agg[k]) agg[k] = { username: ck.username || '(已移除)', date: ck.date, n: 0, ids: [], title: '' };
+        agg[k].n++;
+        agg[k].ids.push(ck.id);
+        if (!agg[k].title && ck.title) agg[k].title = ck.title;
+      });
+      const rows = Object.values(agg);
       box.innerHTML = `
         <div class="card">
-          <h3>全部打卡记录（${d.checkins.length} 条）</h3>
-          ${d.checkins.length ? d.checkins.map(ck => `
+          <h3>打卡记录（${rows.length} 条）</h3>
+          ${rows.length ? rows.map(r => `
             <div class="admin-row">
-              <span class="name">${esc(ck.username)}</span>
-              <span class="muted">${fmtDate(ck.date)}${ck.note ? ' · ' + esc(ck.note) : ''} · ${fmtTime(ck.createdAt)}</span>
-              <button class="btn small danger" onclick="delCheckin('${ck.id}')">删除</button>
+              <span class="name">${esc(r.username)}</span>
+              <span class="muted">${esc(r.title || sch.titleByDate[r.date] || sch.cycleTitle(r.date) || '（当日无安排）')} · ${fmtDate(r.date)} · ${r.n} 次</span>
+              <button class="btn small danger" onclick="delCheckins(['${r.ids.join("','")}'])">删除</button>
             </div>`).join('') : '<div class="empty">暂无打卡记录</div>'}
+        </div>`;
+    } else if (adminTab === 'gooddeeds') {
+      const d = await api('/api/admin/gooddeeds');
+      box.innerHTML = `
+        <div class="card">
+          <h3>全部善叙述（${d.gooddeeds.length} 条）</h3>
+          ${d.gooddeeds.length ? d.gooddeeds.map(g => `
+            <div class="admin-row" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <span class="name">${esc(g.author.username)}</span>
+                <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.updatedAt)} · ${g.versionCount} 版 · 反馈 ${g.feedbackCount} 条</div>
+                <div class="gd-content" style="margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
+              </div>
+              <div style="white-space:nowrap;margin-left:8px">
+                <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
+                <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
+              </div>
+            </div>`).join('') : '<div class="empty">暂无善叙述</div>'}
+        </div>`;
+    } else if (adminTab === 'feedback') {
+      const d = await api('/api/admin/feedback');
+      box.innerHTML = `
+        <div class="card">
+          <h3>全部反馈（${d.feedback.length} 条）</h3>
+          ${d.feedback.length ? d.feedback.map(f => `
+            <div class="admin-row" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <span class="name">${esc(f.author)}</span>
+                <span class="muted">${fmtTime(f.createdAt)} · 针对 ${esc(f.targetTypeLabel)}${f.targetTitle ? '《' + esc(f.targetTitle) + '》' : ''}</span>
+                <div class="fb-content" style="margin-top:4px;white-space:pre-wrap">${esc(f.content)}</div>
+              </div>
+              <button class="btn small danger" onclick="delFeedback('${f.id}')">删除</button>
+            </div>`).join('') : '<div class="empty">暂无反馈</div>'}
         </div>`;
     } else if (adminTab === 'settings') {
       const me = await api('/api/me');
@@ -840,6 +1129,16 @@ async function delCheckin(id) {
   catch (e) { toast(e.message); }
 }
 window.delCheckin = delCheckin;
+
+// 批量删除打卡记录（按 人名+日期 聚合行，删除当天该用户全部打卡）
+function delCheckins(ids) {
+  if (!ids || !ids.length) return;
+  if (!confirm('确定删除这 ' + ids.length + ' 条打卡记录？')) return;
+  Promise.all(ids.map(id => api('/api/admin/checkins/' + id, { method: 'DELETE' })))
+    .then(() => { toast('已删除'); renderAdminBody(); })
+    .catch(e => toast(e.message));
+}
+window.delCheckins = delCheckins;
 
 async function saveLimit() {
   const v = parseInt(document.getElementById('a-limit').value, 10);
