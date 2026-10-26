@@ -434,17 +434,42 @@ function daysLeft(createdAtIso) {
   const elapsed = Date.now() - new Date(createdAtIso).getTime();
   return Math.ceil((total - elapsed) / (24 * 60 * 60 * 1000));
 }
+// 保留期提示：到期自动发送到当事人 Telegram（含反馈），5 天后自动删除；
+// 未绑定 Telegram 的用户保持"下载保存"提示作为兜底
 function retentionHint(gd) {
   const left = daysLeft(gd.createdAt);
-  if (left <= 0) return '<span style="color:#b23a2e;font-weight:600">⚠ 已过保留期，仅保留最终版，请及时下载保存</span>';
-  if (left <= 7) return `<span style="color:#b23a2e;font-weight:600">⚠ 还剩 ${left} 天仅保留最终版，请及时下载保存</span>`;
+  if (gd.tgSentAt) {
+    const del = 5 - Math.ceil((Date.now() - new Date(gd.tgSentAt).getTime()) / (24 * 60 * 60 * 1000));
+    return `<span style="color:#1f4a6a;font-weight:600">✓ 已自动发送至你的 Telegram（含反馈），${del > 0 ? del + ' 天后' : '即将'}自动删除</span>`;
+  }
+  if (!gd.telegramId) {
+    if (left <= 0) return '<span style="color:#b23a2e;font-weight:600">⚠ 已过保留期，请及时下载保存（未绑定 Telegram，无法自动发送）</span>';
+    if (left <= 7) return `<span style="color:#b23a2e;font-weight:600">⚠ 还剩 ${left} 天保留期，请及时下载保存（未绑定 Telegram，无法自动发送）</span>`;
+    return '';
+  }
+  if (left <= 0) return '<span style="color:#b23a2e;font-weight:600">⚠ 已过保留期，即将自动发送到你的 Telegram（含反馈），5 天后自动删除</span>';
+  if (left <= 7) return `<span style="color:#b23a2e;font-weight:600">⚠ 还剩 ${left} 天将自动发送到你的 Telegram（含反馈）</span>`;
   return '';
+}
+
+// 反馈直接显示在善叙述下方（不再需要点击查看）；编号"反馈N，作者"，仅自己的反馈可编辑/删除
+function renderFeedbackInline(feedback) {
+  if (!feedback || !feedback.length) return '';
+  return `<div class="fb-list" style="margin-top:6px">${feedback.map((f, i) => {
+    const mine = f.authorId === state.user.id;
+    return `<div class="fb-item"><span class="who">反馈${i + 1}，${esc(f.author)}</span>：${esc(f.content)} <span class="muted">· ${fmtTime(f.createdAt)}</span>${
+      mine ? `<button class="btn small ghost" style="margin-left:4px" onclick="editFeedback('${f.id}','${esc(f.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button><button class="btn small danger" style="margin-left:4px" onclick="delFeedback('${f.id}')">删除</button>` : ''
+    }</div>`;
+  }).join('')}</div>`;
 }
 
 async function renderGooddeeds(c) {
   c.innerHTML = '<div class="empty">加载中…</div>';
-  const mine = await api('/api/gooddeeds/mine');
-  const all = await api('/api/gooddeeds');
+  const [mine, all, trash] = await Promise.all([
+    api('/api/gooddeeds/mine'),
+    api('/api/gooddeeds'),
+    api('/api/gooddeeds/trash')
+  ]);
   const myNewest = mine.gooddeeds.length ? mine.gooddeeds[0] : null;
   c.innerHTML = `
     <div class="card gd-box">
@@ -458,25 +483,38 @@ async function renderGooddeeds(c) {
       <div class="field"><label>字数不限</label><textarea id="gd-new" placeholder=""></textarea></div>
       <div class="field"><label>文档附件（PDF / Word，可选，单文件 ≤ 8MB）</label><input id="gd-files" type="file" accept=".pdf,.doc,.docx" multiple></div>
       <div class="att-file-hint" id="gd-file-preview"></div>
-      <div class="form-actions" style="margin-top:8px"><button class="btn primary" onclick="submitGooddeed()">递交</button></div>
+      <div class="form-actions" style="margin-top:8px"><button id="btn-gd-submit" class="btn primary" onclick="submitGooddeed()">递交</button></div>
     </div>
     <div class="card gd-box">
       <h3>我的善叙述（${mine.gooddeeds.length} 条）</h3>
       ${mine.gooddeeds.length ? mine.gooddeeds.map((g, i) => `
         <div class="item gd-box" style="border-top:1px solid #e5edf5;padding-top:10px">
-          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : ''}</span><span class="meta">${fmtTime(g.updatedAt)} · ${g.versionCount} 版</span></div>
+          <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : ''}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
           <div style="margin-bottom:6px">${retentionHint(g)}</div>
           <div class="body" style="margin-bottom:6px">${esc(g.content)}</div>
           ${renderAtts(g.attachments, true, g.id)}
+          ${renderFeedbackInline(g.feedback)}
           <div class="actions">
             <button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}',${g.updateLeft})">编辑</button>
             <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
-            <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
+            <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">详情</button>
             <button class="btn small ghost" onclick="downloadGooddeed('${g.id}', '${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}', '${esc(state.user.username)}')">下载到本地</button>
           </div>
         </div>`).join('') : '<div class="small">今天还没写善叙述</div>'}
     </div>
-    <div id="gd-list"></div>`;
+    <div id="gd-list"></div>
+    <div class="card gd-box">
+      <h3>垃圾箱（删除后保留 5 天，可恢复）</h3>
+      ${trash.gooddeeds && trash.gooddeeds.length ? trash.gooddeeds.map(t => `
+        <div class="item gd-box" style="border-top:1px solid #e5edf5;padding-top:10px">
+          <div class="head"><span class="title">${esc(t.author.username)} · ${t.title ? '《' + esc(t.title) + '》' : '（无题）'}</span><span class="meta">${fmtTime(t.deletedAt)} 删除</span></div>
+          <div class="body" style="margin:6px 0">${esc(t.content)}</div>
+          <div class="actions">
+            <span class="muted small">还剩 ${t.daysLeftInTrash} 天自动清除</span>
+            <button class="btn small primary" onclick="restoreGooddeed('${t.id}')">恢复</button>
+          </div>
+        </div>`).join('') : '<div class="small">垃圾箱是空的</div>'}
+    </div>`;
 
   const fileInput = document.getElementById('gd-files');
   if (fileInput) fileInput.addEventListener('change', () => {
@@ -487,14 +525,14 @@ async function renderGooddeeds(c) {
   if (!all.gooddeeds.length) { box.innerHTML = '<div class="empty">还没有人发表善叙述</div>'; return; }
   box.innerHTML = all.gooddeeds.map(g => `
     <div class="item gd-box">
-      <div class="head"><span class="title">${esc(g.author.username)}</span><span class="meta">${fmtTime(g.updatedAt)} · ${g.versionCount} 版</span></div>
+      <div class="head"><span class="title">${esc(g.author.username)}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
       ${g.teaching ? `<div style="font-size:13px;color:#1f4a6a;margin-bottom:6px">针对 ${esc(g.teaching.type)}《${esc(g.teaching.title)}》</div>` : ''}
       <div class="body">${esc(g.content)}</div>
       ${renderAtts(g.attachments, false, g.id)}
+      ${renderFeedbackInline(g.feedback)}
       <div class="actions">
         ${g.author.id === state.user.id ? `<button class="btn small ghost" onclick="openEditGooddeed('${g.id}','${esc(g.content.replace(/'/g, "\\'").replace(/\n/g, '\\n'))}')">编辑</button>` : ''}
         ${(g.author.id === state.user.id || state.user.role === 'admin') ? `<button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>` : ''}
-        <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈（${g.feedbackCount}）</button>
       </div>
       <div class="field" style="margin-top:8px"><textarea id="fb-gooddeed-${g.id}" placeholder="写下你的反馈或建议（字数不限）…" style="min-height:80px"></textarea></div>
       <div class="form-actions"><button class="btn small primary" onclick="submitFeedback('gooddeed','${g.id}')">提交反馈</button></div>
@@ -502,25 +540,29 @@ async function renderGooddeeds(c) {
 }
 
 async function submitGooddeed() {
-  const title = document.getElementById('gd-title').value.trim();
-  const content = document.getElementById('gd-new').value.trim();
-  if (!content) { toast('内容不能为空'); return; }
-  const fileInput = document.getElementById('gd-files');
-  const attachments = [];
-  if (fileInput && fileInput.files && fileInput.files.length) {
-    for (const f of Array.from(fileInput.files)) {
-      attachments.push({ name: f.name, data: await readFileBase64(f) });
-    }
-  }
+  const btn = document.getElementById('btn-gd-submit');
+  if (btn) { btn.disabled = true; btn.textContent = '递交中…'; }
   try {
+    const title = document.getElementById('gd-title').value.trim();
+    const content = document.getElementById('gd-new').value.trim();
+    if (!content) { toast('内容不能为空'); return; }
+    const fileInput = document.getElementById('gd-files');
+    const attachments = [];
+    if (fileInput && fileInput.files && fileInput.files.length) {
+      for (const f of Array.from(fileInput.files)) {
+        attachments.push({ name: f.name, data: await readFileBase64(f) });
+      }
+    }
     const payload = { title, content, attachments };
     if (state.pendingTeachingId) payload.teachingId = state.pendingTeachingId;
-    await api('/api/gooddeeds', { method: 'POST', body: JSON.stringify(payload) });
+    const d = await api('/api/gooddeeds', { method: 'POST', body: JSON.stringify(payload) });
     state.pendingTeachingId = null;
     state.pendingTeachingTitle = null;
-    toast('已发表'); renderView();
+    toast(d.gooddeed && d.gooddeed.duplicate ? '内容与刚才相同，未重复保存' : '已发表');
+    renderView();
   }
   catch (e) { toast(e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '递交'; } }
 }
 window.submitGooddeed = submitGooddeed;
 
@@ -617,16 +659,26 @@ async function delGooddeedAtt(id, attId) {
 }
 window.delGooddeedAtt = delGooddeedAtt;
 
-// 删除整条善叙述（作者本人或管理员）
+// 删除整条善叙述（作者本人或管理员）：软删除进垃圾箱，5 天内可恢复
 async function delGooddeed(id) {
-  if (!confirm('确定删除这条善叙述？所有版本和反馈都会一并删除。')) return;
+  if (!confirm('确定删除这条善叙述？将放入垃圾箱，5 天内可恢复。')) return;
   try {
     await api('/api/gooddeeds/' + id, { method: 'DELETE' });
-    toast('已删除');
+    toast('已移入垃圾箱');
     renderView();
   } catch (e) { toast(e.message); }
 }
 window.delGooddeed = delGooddeed;
+
+// 从垃圾箱恢复善叙述（作者本人或管理员）
+async function restoreGooddeed(id) {
+  try {
+    await api('/api/gooddeeds/' + id + '/restore', { method: 'POST' });
+    toast('已恢复');
+    renderView();
+  } catch (e) { toast(e.message); }
+}
+window.restoreGooddeed = restoreGooddeed;
 
 // 删除反馈（作者本人或管理员）
 async function delFeedback(id) {
@@ -815,7 +867,8 @@ async function renderMine(c) {
       ${gdList.length ? gdList.map((g, i) => `
         <div class="item">
           <div class="head"><span class="title">${i + 1}. ${g.title ? '《' + esc(g.title) + '》' : '（未命名）'}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
-          <div class="muted small" style="margin-top:2px">反馈 ${g.feedbackCount || 0} 条${g.teaching ? ' · 针对《' + esc(g.teaching.title) + '》' : ''}</div>
+          ${g.teaching ? `<div class="muted small" style="margin-top:2px">针对《${esc(g.teaching.title)}》</div>` : ''}
+          ${renderFeedbackInline(g.feedback)}
         </div>`).join('') : '<div class="empty">还没有善叙述</div>'}
     </div>`;
 }
@@ -884,6 +937,7 @@ function renderAdmin(c) {
       <button class="${adminTab === 'checkins' ? 'active' : ''}" onclick="adminTabSwitch('checkins')">打卡内容</button>
       <button class="${adminTab === 'gooddeeds' ? 'active' : ''}" onclick="adminTabSwitch('gooddeeds')">善叙述</button>
       <button class="${adminTab === 'feedback' ? 'active' : ''}" onclick="adminTabSwitch('feedback')">反馈</button>
+      <button class="${adminTab === 'trash' ? 'active' : ''}" onclick="adminTabSwitch('trash')">垃圾箱</button>
       <button class="${adminTab === 'settings' ? 'active' : ''}" onclick="adminTabSwitch('settings')">设置</button>
     </div>
     <div id="admin-body"><div class="empty">加载中…</div></div>`;
@@ -1003,14 +1057,31 @@ async function renderAdminBody() {
             <div class="admin-row" style="align-items:flex-start">
               <div style="flex:1;min-width:0">
                 <span class="name">${esc(g.author.username)}</span>
-                <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.updatedAt)} · ${g.versionCount} 版 · 反馈 ${g.feedbackCount} 条</div>
+                <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.updatedAt)} · 反馈 ${g.feedbackCount} 条</div>
                 <div class="gd-content" style="margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
+                ${renderFeedbackInline(g.feedback)}
               </div>
               <div style="white-space:nowrap;margin-left:8px">
-                <button class="btn small ghost" onclick="showGooddeedDetail('${g.id}')">查看反馈</button>
                 <button class="btn small danger" onclick="delGooddeed('${g.id}')">删除</button>
               </div>
             </div>`).join('') : '<div class="empty">暂无善叙述</div>'}
+        </div>`;
+    } else if (adminTab === 'trash') {
+      const d = await api('/api/gooddeeds/trash');
+      box.innerHTML = `
+        <div class="card">
+          <h3>垃圾箱（${d.gooddeeds.length} 条 · 删除后保留 5 天，可恢复）</h3>
+          ${d.gooddeeds.length ? d.gooddeeds.map(g => `
+            <div class="admin-row" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <span class="name">${esc(g.author.username)}</span>
+                <div class="muted" style="font-size:13px;margin-top:2px">${esc(g.title ? '《' + g.title + '》' : '（无题）')} · ${fmtTime(g.deletedAt)} 删除 · 还剩 ${g.daysLeftInTrash} 天自动清除</div>
+                <div class="gd-content" style="margin-top:4px;white-space:pre-wrap">${esc(g.content)}</div>
+              </div>
+              <div style="white-space:nowrap;margin-left:8px">
+                <button class="btn small primary" onclick="restoreGooddeed('${g.id}')">恢复</button>
+              </div>
+            </div>`).join('') : '<div class="empty">垃圾箱是空的</div>'}
         </div>`;
     } else if (adminTab === 'feedback') {
       const d = await api('/api/admin/feedback');
