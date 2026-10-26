@@ -525,7 +525,7 @@ async function renderGooddeeds(c) {
   if (!all.gooddeeds.length) { box.innerHTML = '<div class="empty">还没有人发表善叙述</div>'; return; }
   box.innerHTML = all.gooddeeds.map(g => `
     <div class="item gd-box">
-      <div class="head"><span class="title">${esc(g.author.username)}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
+      <div class="head"><span class="title">${esc(g.author.username)}${g.title ? ' · 《' + esc(g.title) + '》' : ''}</span><span class="meta">${fmtTime(g.updatedAt)}</span></div>
       ${g.teaching ? `<div style="font-size:13px;color:#1f4a6a;margin-bottom:6px">针对 ${esc(g.teaching.type)}《${esc(g.teaching.title)}》</div>` : ''}
       <div class="body">${esc(g.content)}</div>
       ${renderAtts(g.attachments, false, g.id)}
