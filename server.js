@@ -251,17 +251,36 @@ route('POST', '/api/auth/telegram', async (req, res) => {
   let user = await qOne('SELECT * FROM users WHERE telegram_id = $1 LIMIT 1', [tgId]);
 
   if (!user) {
-    const count = await countTable('users');
-    if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
+    // 兜底：Telegram 显示名（或用户名）与库中"未绑定 Telegram"的既有账号一致时，
+    // 自动绑定到该账号，避免重复注册（修复早期账号未存 telegram_id、再次打开会建重复账号的问题）
+    const displayName = String(tgUser.first_name || '').trim() + (tgUser.last_name ? ' ' + String(tgUser.last_name).trim() : '');
+    const handleName = String(tgUser.username || '').trim();
+    const candidateNames = [displayName, handleName].filter(n => n.length > 0);
+    if (candidateNames.length) {
+      const lowerNames = candidateNames.map(n => n.toLowerCase());
+      const placeholders = lowerNames.map((_, i) => `lower($${i + 1})`).join(', ');
+      user = await qOne(
+        `SELECT * FROM users WHERE telegram_id IS NULL AND lower(username) IN (${placeholders}) LIMIT 1`,
+        lowerNames
+      );
+      if (user) {
+        user = await updateRow('users', { telegram_id: tgId, updated_at: nowIso() }, 'id', user.id);
+      }
+    }
 
-    user = await insertRow('users', {
-      id: uid(),
-      username: (tgUser.username || (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) || ('tg_' + tgId.slice(0, 8))),
-      salt: crypto.randomBytes(12).toString('hex'),
-      password_hash: null,
-      role: count === 0 ? 'admin' : 'member',
-      telegram_id: tgId,
-    });
+    if (!user) {
+      const count = await countTable('users');
+      if (count >= memberLimit) return err(res, 403, `成员已满（上限 ${memberLimit} 人），请联系管理员增加人数`);
+
+      user = await insertRow('users', {
+        id: uid(),
+        username: (tgUser.username || (tgUser.first_name + (tgUser.last_name ? ' ' + tgUser.last_name : '')) || ('tg_' + tgId.slice(0, 8))),
+        salt: crypto.randomBytes(12).toString('hex'),
+        password_hash: null,
+        role: count === 0 ? 'admin' : 'member',
+        telegram_id: tgId,
+      });
+    }
   }
 
   const token = crypto.randomBytes(32).toString('hex');
@@ -576,6 +595,7 @@ route('GET', '/api/gooddeeds', async (req, res) => {
     return {
       id: gd.id,
       author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      title: gd.title || '',
       content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
       attachments: gd.attachments || [],
       teachingId: gd.teaching_id || null,
