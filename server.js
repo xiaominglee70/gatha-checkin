@@ -25,6 +25,9 @@ const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const MEMBER_LIMIT_DEFAULT = 15;
 const GOODDEED_MAX_UPDATES = 999;
 const GOODDEED_RETENTION_DAYS = 30;
+const GOODDEED_TRASH_DAYS = 5;                 // 善叙述垃圾箱保留天数（超期彻底清除）
+const GOODDEED_DELETE_AFTER_SEND_DAYS = 5;     // 发送到 Telegram 后自动删除的天数
+const DUPLICATE_POST_WINDOW_MS = 2 * 60 * 1000; // 防重复递交判定窗口（保存慢/双击误触）
 const PORT = process.env.PORT || 10000;
 
 // ---------------- 数据目录（附件上传用） ----------------
@@ -542,11 +545,23 @@ route('GET', '/api/checkins/mine', async (req, res) => {
 });
 
 // ============ 善叙述 ============
+// 反馈：按时间正序取回（供"直接显示在善叙述后面"使用）
+async function gooddeedFeedbackList(gdId) {
+  return await q(
+    `SELECT f.*, u.username AS author_username
+     FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+     WHERE f.target_type = 'gooddeed' AND f.target_id = $1
+     ORDER BY f.created_at ASC`, [gdId]);
+}
+function mapFeedback(f) {
+  return { id: f.id, content: f.content, createdAt: f.created_at, author: f.author_username || '(已移除)', authorId: f.user_id || null };
+}
+
 route('GET', '/api/gooddeeds', async (req, res) => {
   const user = await authUser(req);
   if (!user) return err(res, 401, '未登录');
 
-  const list = await q('SELECT * FROM gooddeeds ORDER BY updated_at DESC');
+  const list = await q('SELECT * FROM gooddeeds WHERE deleted_at IS NULL ORDER BY updated_at DESC');
 
   const result = await Promise.all((list || []).map(async (gd) => {
     await pruneGoodDeedVersions(gd);
@@ -556,7 +571,7 @@ route('GET', '/api/gooddeeds', async (req, res) => {
       const t = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [gd.teaching_id]);
       teaching = t;
     }
-    const feedbackCount = await countTable('feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+    const feedbackRows = await gooddeedFeedbackList(gd.id);
 
     return {
       id: gd.id,
@@ -567,7 +582,8 @@ route('GET', '/api/gooddeeds', async (req, res) => {
       teaching: teaching ? { id: teaching.id, title: teaching.title, type: teaching.type } : null,
       versionCount: gd.versions.length,
       updatedAt: gd.updated_at, createdAt: gd.created_at,
-      feedbackCount: feedbackCount || 0,
+      feedback: (feedbackRows || []).map(mapFeedback),
+      feedbackCount: (feedbackRows || []).length,
     };
   }));
 
@@ -578,7 +594,7 @@ route('GET', '/api/gooddeeds/mine', async (req, res) => {
   const user = await authUser(req);
   if (!user) return err(res, 401, '未登录');
 
-  const list = await q('SELECT * FROM gooddeeds WHERE user_id = $1 ORDER BY updated_at DESC', [user.id]);
+  const list = await q('SELECT * FROM gooddeeds WHERE user_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC', [user.id]);
 
   const settings = await qOne('SELECT gooddeed_max_updates FROM settings WHERE id = 1 LIMIT 1');
   const maxUpdates = settings?.gooddeed_max_updates || GOODDEED_MAX_UPDATES;
@@ -590,6 +606,7 @@ route('GET', '/api/gooddeeds/mine', async (req, res) => {
       const t = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [gd.teaching_id]);
       teaching = t;
     }
+    const feedbackRows = await gooddeedFeedbackList(gd.id);
     return {
       id: gd.id, title: gd.title || '',
       content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
@@ -599,6 +616,39 @@ route('GET', '/api/gooddeeds/mine', async (req, res) => {
       versions: gd.versions, versionCount: gd.versions.length,
       updateLeft: Math.max(0, maxUpdates - (gd.versions.length - 1)),
       updatedAt: gd.updated_at, createdAt: gd.created_at,
+      feedback: (feedbackRows || []).map(mapFeedback),
+      feedbackCount: (feedbackRows || []).length,
+      tgSentAt: gd.tg_sent_at || null,
+      telegramId: user.telegram_id ? true : false,
+    };
+  }));
+
+  json(res, 200, { gooddeeds: result });
+});
+
+// 垃圾箱：删除后 5 天内可恢复（管理员看全部，成员看自己的）
+route('GET', '/api/gooddeeds/trash', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const list = user.role === 'admin'
+    ? await q('SELECT * FROM gooddeeds WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC')
+    : await q('SELECT * FROM gooddeeds WHERE user_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC', [user.id]);
+
+  const result = await Promise.all((list || []).map(async (gd) => {
+    await pruneGoodDeedVersions(gd);
+    const author = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [gd.user_id]);
+    const elapsed = Date.now() - new Date(gd.deleted_at).getTime();
+    const daysLeft = Math.max(0, Math.ceil((GOODDEED_TRASH_DAYS * 24 * 60 * 60 * 1000 - elapsed) / (24 * 60 * 60 * 1000)));
+    const fbCount = await countTable('feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+    return {
+      id: gd.id,
+      author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
+      title: gd.title || '',
+      content: gd.versions.length ? gd.versions[gd.versions.length - 1].content : '',
+      attachments: gd.attachments || [],
+      deletedAt: gd.deleted_at, daysLeftInTrash: daysLeft,
+      feedbackCount: fbCount || 0,
     };
   }));
 
@@ -615,6 +665,24 @@ route('POST', '/api/gooddeeds', async (req, res) => {
 
   const today = todayStr();
   const todayCheckin = await qOne('SELECT id FROM checkins WHERE user_id = $1 AND date = $2 ORDER BY created_at DESC LIMIT 1', [user.id, today]);
+
+  // 防重复递交：保存较慢时用户可能连点多次，2 分钟内"同作者+同标题+同关联内容+同内容"
+  // 视为重复双击，直接返回已有记录，不新建——确保只留一条
+  const title = String(body.title || '').trim();
+  const teachingId = body.teachingId || null;
+  const recent = await qOne(
+    `SELECT * FROM gooddeeds
+     WHERE user_id = $1 AND deleted_at IS NULL AND created_at > $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [user.id, new Date(Date.now() - DUPLICATE_POST_WINDOW_MS).toISOString()]
+  );
+  if (recent &&
+      String(recent.teaching_id || '') === String(teachingId || '') &&
+      String(recent.title || '') === String(title || '') &&
+      Array.isArray(recent.versions) && recent.versions.length &&
+      recent.versions[recent.versions.length - 1].content === content) {
+    return json(res, 200, { gooddeed: { id: recent.id, attachments: recent.attachments || [], duplicate: true } });
+  }
 
   const attachments = [];
   if (Array.isArray(body.attachments)) {
@@ -727,7 +795,7 @@ route('DELETE', '/api/gooddeeds/:id/attachments/:attId', async (req, res) => {
   json(res, 200, { ok: true });
 });
 
-// 删除整条善叙述
+// 删除整条善叙述：软删除进垃圾箱（5 天内可恢复，超期由定时任务彻底清除）
 route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
   const user = await authUser(req);
   if (!user) return err(res, 401, '未登录');
@@ -736,9 +804,21 @@ route('DELETE', '/api/gooddeeds/:id', async (req, res) => {
   if (!gd) return err(res, 404, '善叙述不存在');
   if (gd.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能删除自己的善叙述');
 
-  (gd.attachments || []).forEach(a => { try { fs.unlinkSync(path.join(UPLOAD_DIR, a.fileName)); } catch (e) {} });
-  await pool.query('DELETE FROM feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
-  await pool.query('DELETE FROM gooddeeds WHERE id = $1', [gd.id]);
+  await updateRow('gooddeeds', { deleted_at: nowIso() }, 'id', gd.id);
+  json(res, 200, { ok: true, trash: true });
+});
+
+// 恢复垃圾箱中的善叙述（作者本人或管理员）
+route('POST', '/api/gooddeeds/:id/restore', async (req, res) => {
+  const user = await authUser(req);
+  if (!user) return err(res, 401, '未登录');
+
+  const gd = await qOne('SELECT * FROM gooddeeds WHERE id = $1 LIMIT 1', [req.params.id]);
+  if (!gd) return err(res, 404, '善叙述不存在');
+  if (gd.user_id !== user.id && user.role !== 'admin') return err(res, 403, '只能恢复自己的善叙述');
+  if (!gd.deleted_at) return err(res, 400, '该善叙述不在垃圾箱中');
+
+  await updateRow('gooddeeds', { deleted_at: null, updated_at: nowIso() }, 'id', gd.id);
   json(res, 200, { ok: true });
 });
 
@@ -947,11 +1027,11 @@ route('GET', '/api/admin/gooddeeds', async (req, res) => {
   if (!user) return err(res, 401, '未登录');
   if (user.role !== 'admin') return err(res, 403, '仅管理员可查看');
 
-  const list = await q('SELECT * FROM gooddeeds ORDER BY updated_at DESC');
+  const list = await q('SELECT * FROM gooddeeds WHERE deleted_at IS NULL ORDER BY updated_at DESC');
   const result = await Promise.all((list || []).map(async (gd) => {
     await pruneGoodDeedVersions(gd);
     const author = await qOne('SELECT * FROM users WHERE id = $1 LIMIT 1', [gd.user_id]);
-    const feedbackCount = await countTable('feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+    const feedbackRows = await gooddeedFeedbackList(gd.id);
     return {
       id: gd.id,
       author: author ? publicUser(author) : { id: gd.user_id, username: '(已移除)', role: 'member' },
@@ -960,7 +1040,8 @@ route('GET', '/api/admin/gooddeeds', async (req, res) => {
       teachingId: gd.teaching_id || null,
       versionCount: gd.versions.length,
       updatedAt: gd.updated_at, createdAt: gd.created_at,
-      feedbackCount: feedbackCount || 0,
+      feedback: (feedbackRows || []).map(mapFeedback),
+      feedbackCount: (feedbackRows || []).length,
     };
   }));
   json(res, 200, { gooddeeds: result });
@@ -1079,6 +1160,12 @@ async function seed() {
     try { await pool.query('ALTER TABLE checkins ADD COLUMN IF NOT EXISTS title TEXT'); }
     catch (e) { console.log('[Seed] checkins.title 迁移:', e.message); }
 
+    // 迁移：善叙述增加 垃圾箱时间 / 已发送Telegram时间 列
+    try { await pool.query('ALTER TABLE gooddeeds ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ'); }
+    catch (e) { console.log('[Seed] gooddeeds.deleted_at 迁移:', e.message); }
+    try { await pool.query('ALTER TABLE gooddeeds ADD COLUMN IF NOT EXISTS tg_sent_at TIMESTAMPTZ'); }
+    catch (e) { console.log('[Seed] gooddeeds.tg_sent_at 迁移:', e.message); }
+
     // 迁移：善叙述只保留最新版本（把历史多版本收拢为最后一条；jsonb 数组用负索引取末位）
     try {
       await pool.query(
@@ -1086,6 +1173,28 @@ async function seed() {
          WHERE jsonb_array_length(versions) > 1`
       );
     } catch (e) { console.log('[Seed] gooddeeds 版本收拢:', e.message); }
+
+    // 迁移：合并历史重复善叙述（同作者、同标题、同关联内容、最新一版内容完全相同者，
+    // 只保留最后创建的一条，其余视为重复双击产生的冗余，一并清除）——"比较后只留一个"
+    try {
+      await pool.query(
+        `DELETE FROM gooddeeds WHERE id IN (
+           SELECT a.id FROM gooddeeds a
+           JOIN gooddeeds b ON a.user_id = b.user_id
+             AND a.teaching_id IS NOT DISTINCT FROM b.teaching_id
+             AND a.title IS NOT DISTINCT FROM b.title
+             AND (a.versions->-1->>'content') = (b.versions->-1->>'content')
+           WHERE a.id <> b.id AND a.deleted_at IS NULL AND b.deleted_at IS NULL
+             AND a.created_at < b.created_at
+         )`
+      );
+    } catch (e) { console.log('[Seed] gooddeeds 重复合并:', e.message); }
+    // 清理因合并/删除变成孤儿（目标不存在）的反馈记录
+    try {
+      await pool.query(
+        `DELETE FROM feedback WHERE target_type = 'gooddeed' AND target_id NOT IN (SELECT id FROM gooddeeds)`
+      );
+    } catch (e) { console.log('[Seed] 孤儿反馈清理:', e.message); }
 
     const userCount = await countTable('users');
     if (userCount === 0) {
@@ -1127,10 +1236,21 @@ seed().then(() => {
   });
 });
 
+// 测试钩子：仅在作为模块被 require（非直接启动）时导出内部函数，供本地自动化测试使用
+if (require.main !== module) {
+  module.exports = {
+    pool, runRetentionJobs, sendAdminContentReminder, hardDeleteGooddeed,
+    buildGooddeedTgMessage, tgSendHTML, todayStr, addDaysToDateStr, server,
+  };
+}
+
 
 // ---------------- Telegram 待打卡提醒（默认每天 20:00，可用环境变量 REMIND_HOUR / REMIND_MINUTE 调整） ----------------
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 async function tgSend(chatId, text) {
-  if (!BOT_TOKEN) { console.log('[提醒] BOT_TOKEN 未配置，跳过推送'); return; }
+  if (!BOT_TOKEN) { console.log('[提醒] BOT_TOKEN 未配置，跳过推送'); return false; }
   try {
     const r = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
       method: 'POST',
@@ -1138,9 +1258,133 @@ async function tgSend(chatId, text) {
       body: JSON.stringify({ chat_id: chatId, text })
     });
     const j = await r.json();
-    if (!j.ok) console.log('[提醒] 发送失败:', j.description || '未知错误');
-  } catch (e) { console.log('[提醒] 发送异常:', e.message); }
+    if (!j.ok) { console.log('[提醒] 发送失败:', j.description || '未知错误'); return false; }
+    return true;
+  } catch (e) { console.log('[提醒] 发送异常:', e.message); return false; }
 }
+async function tgSendHTML(chatId, html) {
+  if (!BOT_TOKEN) { console.log('[提醒] BOT_TOKEN 未配置，跳过推送'); return false; }
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: html, parse_mode: 'HTML' })
+    });
+    const j = await r.json();
+    if (!j.ok) { console.log('[提醒] 发送失败:', j.description || '未知错误'); return false; }
+    return true;
+  } catch (e) { console.log('[提醒] 发送异常:', e.message); return false; }
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// 构建"一条善叙述 + 其全部反馈"的 Telegram 消息
+function buildGooddeedTgMessage(gd, authorName, teaching, feedbackRows) {
+  const title = gd.title || '善叙述';
+  const content = (Array.isArray(gd.versions) && gd.versions.length) ? gd.versions[gd.versions.length - 1].content : '';
+  const lines = [];
+  lines.push('<b>📄 善叙述《' + escHtml(title) + '》</b>');
+  lines.push('作者：' + escHtml(authorName));
+  if (teaching) lines.push('针对：' + escHtml(teaching.type) + '《' + escHtml(teaching.title) + '》');
+  lines.push('────────────────');
+  lines.push('<pre>' + escHtml(content) + '</pre>');
+  if (feedbackRows && feedbackRows.length) {
+    lines.push('────────────');
+    lines.push('<b>反馈（' + feedbackRows.length + ' 条）：</b>');
+    feedbackRows.forEach((f, i) => {
+      lines.push((i + 1) + '. ' + escHtml(f.author_username || '(已移除)') + '：' + escHtml(f.content));
+    });
+  }
+  lines.push('（本条已发送给你保存，5 天后自动从小组服务器删除）');
+  return lines.join('\n');
+}
+
+// 彻底清除一条善叙述（连同反馈与附件文件）
+async function hardDeleteGooddeed(gd) {
+  (gd.attachments || []).forEach(a => { try { fs.unlinkSync(path.join(UPLOAD_DIR, a.fileName)); } catch (e) {} });
+  await pool.query('DELETE FROM feedback WHERE target_type = $1 AND target_id = $2', ['gooddeed', gd.id]);
+  await pool.query('DELETE FROM gooddeeds WHERE id = $1', [gd.id]);
+}
+
+// ---------------- 善叙述生命周期定时任务（每 10 分钟） ----------------
+// 1) 保留期（默认 30 天）到期的善叙述：自动逐篇发送到当事人 Telegram（含反馈），发送 5 天后删除
+// 2) 已发送满 5 天：彻底删除
+// 3) 垃圾箱中超过 5 天：彻底清除
+async function runRetentionJobs() {
+  // 1) 到期自动发送
+  const cutoff = new Date(Date.now() - GOODDEED_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const due = await q(
+    `SELECT gd.*, u.username AS author_name, u.telegram_id
+     FROM gooddeeds gd JOIN users u ON u.id = gd.user_id
+     WHERE gd.deleted_at IS NULL AND gd.tg_sent_at IS NULL
+       AND gd.created_at < $1 AND u.telegram_id IS NOT NULL
+     ORDER BY gd.created_at ASC`, [cutoff]);
+  for (const gd of due || []) {
+    let teaching = null;
+    if (gd.teaching_id) {
+      teaching = await qOne('SELECT id, title, type FROM teachings WHERE id = $1 LIMIT 1', [gd.teaching_id]);
+    }
+    const fb = await q(
+      `SELECT f.content, u.username AS author_username FROM feedback f
+       LEFT JOIN users u ON u.id = f.user_id
+       WHERE f.target_type = $1 AND f.target_id = $2 ORDER BY f.created_at ASC`, ['gooddeed', gd.id]);
+    const ok = await tgSendHTML(gd.telegram_id, buildGooddeedTgMessage(gd, gd.author_name, teaching, fb));
+    if (ok) {
+      await updateRow('gooddeeds', { tg_sent_at: nowIso() }, 'id', gd.id);
+      console.log('[善叙述] 已发送到 Telegram 用户 ' + gd.telegram_id + '，5 天后自动删除');
+      await sleep(1000); // 避免触发 Telegram 频率限制
+    }
+  }
+
+  // 2) 已发送满 5 天：彻底删除
+  const delAfter = new Date(Date.now() - GOODDEED_DELETE_AFTER_SEND_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const sent = await q('SELECT * FROM gooddeeds WHERE tg_sent_at IS NOT NULL AND tg_sent_at < $1', [delAfter]);
+  for (const gd of sent || []) {
+    await hardDeleteGooddeed(gd);
+    console.log('[善叙述] 已发送满 ' + GOODDEED_DELETE_AFTER_SEND_DAYS + ' 天，已从数据库删除');
+  }
+
+  // 3) 垃圾箱超过 5 天：彻底清除
+  const trashCut = new Date(Date.now() - GOODDEED_TRASH_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const trashed = await q('SELECT * FROM gooddeeds WHERE deleted_at IS NOT NULL AND deleted_at < $1', [trashCut]);
+  for (const gd of trashed || []) {
+    await hardDeleteGooddeed(gd);
+    console.log('[善叙述] 垃圾箱超期，已彻底清除');
+  }
+}
+
+// ---------------- 管理员提醒：明天没有打卡内容时提醒更新（避免第二天无内容） ----------------
+let lastAdminContentRemindDate = '';
+async function sendAdminContentReminder() {
+  const today = todayStr();
+  const tomorrow = addDaysToDateStr(today, 1);
+  const tTomorrow = await qOne('SELECT id FROM teachings WHERE scheduled_date = $1 LIMIT 1', [tomorrow]);
+  const cTomorrow = await qOne(
+    `SELECT id FROM cycles WHERE status = 'active' AND start_date <= $1 AND (end_date IS NULL OR end_date >= $1) LIMIT 1`,
+    [tomorrow]);
+  if (tTomorrow || cTomorrow) return; // 明天已有内容，无需提醒
+  const endingToday = await qOne(
+    `SELECT id FROM cycles WHERE status = 'active' AND end_date = $1 LIMIT 1`, [today]);
+  const admins = await q('SELECT * FROM users WHERE role = $1 AND telegram_id IS NOT NULL', ['admin']);
+  if (!admins || !admins.length) return;
+  const msg = '⚠️ <b>【管理员提醒】</b>明天（' + tomorrow + '）还没有安排偈语/开示打卡内容'
+    + (endingToday ? '，今天的安排已到期' : '')
+    + '。\n请及时更新新的内容，避免明天没有打卡内容。';
+  let sent = 0;
+  for (const a of admins) { if (await tgSendHTML(a.telegram_id, msg)) sent++; }
+  console.log('[管理员提醒] ' + today + '：明天无打卡内容，已提醒 ' + sent + ' 名管理员');
+}
+
+// 生命周期任务每 10 分钟运行一次（同时检查管理员内容提醒，每天至多一次）
+setInterval(async () => {
+  try {
+    const today = todayStr();
+    if (lastAdminContentRemindDate !== today) {
+      await sendAdminContentReminder();
+      lastAdminContentRemindDate = today;
+    }
+    await runRetentionJobs();
+  } catch (e) { console.log('[定时任务] 运行错误:', e.message); }
+}, 10 * 60 * 1000);
 
 const REMIND_HOUR = Number(process.env.REMIND_HOUR || 20);
 const REMIND_MINUTE = Number(process.env.REMIND_MINUTE || 0);
